@@ -1,0 +1,34 @@
+{
+  "asset": "public/models/client-haru.glb",
+  "sourceFile": "/Users/colin/Downloads/7113633125817327043.glb",
+  "sha256": "06e20f935391225f2d570ccc3085c589c2c8d5b35a9ae28f371be3714ad3e397",
+  "format": "glTF 2.0 GLB with VRM 0.0 extension",
+  "generator": "VRoid Studio-2.1.6 / UniGLTF-2.64.1",
+  "title": "Haru",
+  "author": "hyona",
+  "humanoidBoneCount": 54,
+  "morphTargetCount": 57,
+  "expressionSupport": {
+    "presetBindings": [
+      "a",
+      "i",
+      "u",
+      "e",
+      "o",
+      "blink",
+      "blink_l",
+      "blink_r",
+      "angry",
+      "fun",
+      "joy",
+      "sorrow"
+    ],
+    "arkit52": false,
+    "runtimeNote": "Use VRM0 expression aliases in VrmStage, for example sad -> sorrow and aa -> a."
+  },
+  "licenseNote": {
+    "credit": "Credit required by embedded VRM metadata.",
+    "redistribution": "Embedded metadata allows redistribution, but disallows modification and commercial use.",
+    "usage": "Local prototype validation only."
+  }
+}

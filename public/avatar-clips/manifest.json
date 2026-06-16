@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "source": "local-upper-body-vrma-manifest",
+  "clips": [
+    {
+      "id": "xlunar_angry_upper",
+      "file": "/avatar-clips/_incoming/xlunar/Angry.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Angry.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream vrm-viewer/VRoid/third-party animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["student_depression_bullying", "alcohol_misuse"],
+      "motionCue": "lean_back",
+      "affectTags": ["defensive", "irritated"]
+    },
+    {
+      "id": "xlunar_blush_upper",
+      "file": "/avatar-clips/_incoming/xlunar/Blush.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Blush.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["student_depression_bullying", "anxiety_family_invalidated", "substance_recovery_meth"],
+      "motionCue": "look_down",
+      "affectTags": ["ashamed"]
+    },
+    {
+      "id": "xlunar_lookaround_upper",
+      "file": "/avatar-clips/_incoming/xlunar/LookAround.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/LookAround.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["anxiety_family_invalidated", "student_depression_bullying"],
+      "motionCue": "avoid_eye_contact",
+      "affectTags": ["anxious", "withdrawn"]
+    },
+    {
+      "id": "xlunar_relax_upper",
+      "file": "/avatar-clips/_incoming/xlunar/Relax.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Relax.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["alcohol_misuse", "anxiety_family_invalidated"],
+      "motionCue": "neutral",
+      "affectTags": ["neutral", "reflective"]
+    },
+    {
+      "id": "xlunar_sad_upper",
+      "file": "/avatar-clips/_incoming/xlunar/Sad.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Sad.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["student_depression_bullying", "trauma_sleep_low_self_worth"],
+      "motionCue": "look_down",
+      "affectTags": ["sad", "withdrawn"]
+    },
+    {
+      "id": "xlunar_sleepy_upper",
+      "file": "/avatar-clips/_incoming/xlunar/Sleepy.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Sleepy.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["trauma_sleep_low_self_worth"],
+      "motionCue": "look_down",
+      "affectTags": ["sad", "withdrawn"]
+    },
+    {
+      "id": "xlunar_thinking_upper",
+      "file": "/avatar-clips/_incoming/xlunar/Thinking.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Thinking.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream animation credits.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": true,
+      "caseTags": ["alcohol_misuse", "substance_recovery_meth", "anxiety_family_invalidated"],
+      "motionCue": "slow_nod",
+      "affectTags": ["reflective"]
+    },
+    {
+      "id": "xlunar_greeting_upper_debug",
+      "file": "/avatar-clips/_incoming/xlunar/Greeting.vrma",
+      "source": "iamenahs/xlunar-ai-avatar/public/animations/Greeting.vrma",
+      "licenseStatus": "credit_required",
+      "credit": "Preserve xlunar-ai-avatar and upstream VRoid Project Motion Pack credit.",
+      "playbackMask": "upper_body",
+      "seatedRuntime": true,
+      "autoLoad": false,
+      "caseTags": [],
+      "motionCue": "neutral",
+      "affectTags": ["neutral"]
+    }
+  ]
+}

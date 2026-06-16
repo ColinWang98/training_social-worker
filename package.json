@@ -1,0 +1,52 @@
+{
+  "name": "social-work-avatar-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "dev:all": "node scripts/dev-all.mjs",
+    "dev:vite": "vite --host 127.0.0.1",
+    "adk:install": "python3 -m venv .venv-adk && .venv-adk/bin/pip install -r adk_service/requirements.txt",
+    "adk:dev": ".venv-adk/bin/python -m uvicorn adk_service.main:app --host 127.0.0.1 --port 8765",
+    "adk:smoke": "python3 scripts/adk-smoke-test.py",
+    "smoke:sessions": "python3 scripts/session-smoke-test.py",
+    "smoke:methods": "python3 scripts/method-smoke-test.py",
+    "evaluate:sessions": "python3 scripts/evaluate-session.py",
+    "profile:generate": "python3 scripts/generate-profile.py",
+    "profile:adapt": "python3 scripts/adapt-profile.py",
+    "vrma:download": "node scripts/download-vrma-candidates.mjs",
+    "vrma:validate": "node scripts/validate-vrma-manifest.mjs",
+    "vrm:arkit": "node scripts/generate-arkit-proxy-vrm.mjs",
+    "vrm:inspect": "node scripts/inspect-vrm-blendshapes.mjs",
+    "supabase:import": ".venv-adk/bin/python scripts/import-sqlite-corpus-to-supabase.py",
+    "corpus:import": "node scripts/import-hf-corpus.mjs",
+    "corpus:preflight": "node scripts/corpus-preflight.mjs --sources=runtime",
+    "corpus:build": "node scripts/build-corpus.mjs",
+    "corpus:build:full": "node scripts/build-corpus.mjs --full --sources=runtime",
+    "corpus:export": "node scripts/export-runtime-corpus.mjs",
+    "corpus:export:balanced": "node scripts/export-runtime-corpus.mjs --balanced --max-per-case=3000 --max-per-source-per-case=800",
+    "corpus:stats": "node scripts/corpus-stats.mjs",
+    "corpus:embed": ".venv-adk/bin/python scripts/corpus-embed.py",
+    "corpus:embed:stats": ".venv-adk/bin/python scripts/corpus-embed-stats.py",
+    "evaluate:retrieval": ".venv-adk/bin/python scripts/evaluate-retrieval.py",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.4.2",
+    "@pixiv/three-vrm-animation": "^3.4.2",
+    "@vitejs/plugin-react": "^5.1.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.171.0",
+    "vite": "^6.0.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.184.1",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,509 @@
+{
+  "generatedAt": "2026-06-15T11:03:50.546Z",
+  "method": "local-arkit-proxy-from-vroid-morph-targets",
+  "vroidShaperAttempt": {
+    "used": false,
+    "note": "VRoidShaper was evaluated first. Current model failed because its face vertex count differs from the bundled reference model.",
+    "source": "https://github.com/Ultimationzzz/VRoidShaper"
+  },
+  "input": {
+    "file": "public/models/client-john-do.vrm",
+    "sha256": "572db74dc2721f6efab00a707498257f7787ec2830c0376ff20bd226dcfa245e",
+    "inspection": {
+      "file": "/Users/colin/Documents/social work simulation/public/models/client-john-do.vrm",
+      "bytes": 15972548,
+      "vrmVersion": "1.0",
+      "presetExpressions": [
+        "happy",
+        "angry",
+        "sad",
+        "relaxed",
+        "surprised",
+        "aa",
+        "ih",
+        "ou",
+        "ee",
+        "oh",
+        "blink",
+        "blinkLeft",
+        "blinkRight",
+        "neutral"
+      ],
+      "customExpressions": [],
+      "missingPresets": [],
+      "faceMeshes": [
+        {
+          "index": 0,
+          "name": "Face (merged)",
+          "targetNameCount": 57,
+          "primitiveTargetCounts": [
+            57
+          ]
+        }
+      ],
+      "arkit": {
+        "expectedCount": 52,
+        "presentCount": 0,
+        "missingCount": 52,
+        "present": [],
+        "missing": [
+          "browDownLeft",
+          "browDownRight",
+          "browInnerUp",
+          "browOuterUpLeft",
+          "browOuterUpRight",
+          "cheekPuff",
+          "cheekSquintLeft",
+          "cheekSquintRight",
+          "eyeBlinkLeft",
+          "eyeBlinkRight",
+          "eyeLookDownLeft",
+          "eyeLookDownRight",
+          "eyeLookInLeft",
+          "eyeLookInRight",
+          "eyeLookOutLeft",
+          "eyeLookOutRight",
+          "eyeLookUpLeft",
+          "eyeLookUpRight",
+          "eyeSquintLeft",
+          "eyeSquintRight",
+          "eyeWideLeft",
+          "eyeWideRight",
+          "jawForward",
+          "jawLeft",
+          "jawOpen",
+          "jawRight",
+          "mouthClose",
+          "mouthDimpleLeft",
+          "mouthDimpleRight",
+          "mouthFrownLeft",
+          "mouthFrownRight",
+          "mouthFunnel",
+          "mouthLeft",
+          "mouthLowerDownLeft",
+          "mouthLowerDownRight",
+          "mouthPressLeft",
+          "mouthPressRight",
+          "mouthPucker",
+          "mouthRight",
+          "mouthRollLower",
+          "mouthRollUpper",
+          "mouthShrugLower",
+          "mouthShrugUpper",
+          "mouthSmileLeft",
+          "mouthSmileRight",
+          "mouthStretchLeft",
+          "mouthStretchRight",
+          "mouthUpperUpLeft",
+          "mouthUpperUpRight",
+          "noseSneerLeft",
+          "noseSneerRight",
+          "tongueOut"
+        ],
+        "missingCriticalTargets": [
+          "browDownLeft",
+          "browDownRight",
+          "browInnerUp",
+          "eyeBlinkLeft",
+          "eyeBlinkRight",
+          "eyeSquintLeft",
+          "eyeSquintRight",
+          "eyeWideLeft",
+          "eyeWideRight",
+          "jawOpen",
+          "mouthClose",
+          "mouthFunnel",
+          "mouthPucker",
+          "mouthSmileLeft",
+          "mouthSmileRight",
+          "mouthFrownLeft",
+          "mouthFrownRight",
+          "mouthStretchLeft",
+          "mouthStretchRight"
+        ],
+        "usableForRuntime": false
+      }
+    }
+  },
+  "output": {
+    "file": "public/models/client-john-do-arkit.vrm",
+    "sha256": "ca3c7f568ccfcd0e58842f0e6d5bcb5635ac458f789fa6efc30f3c22ea0b145e",
+    "inspection": {
+      "file": "/Users/colin/Documents/social work simulation/public/models/client-john-do-arkit.vrm",
+      "bytes": 16024900,
+      "vrmVersion": "1.0",
+      "presetExpressions": [
+        "happy",
+        "angry",
+        "sad",
+        "relaxed",
+        "surprised",
+        "aa",
+        "ih",
+        "ou",
+        "ee",
+        "oh",
+        "blink",
+        "blinkLeft",
+        "blinkRight",
+        "neutral"
+      ],
+      "customExpressions": [],
+      "missingPresets": [],
+      "faceMeshes": [
+        {
+          "index": 0,
+          "name": "Face (merged)",
+          "targetNameCount": 109,
+          "primitiveTargetCounts": [
+            109
+          ]
+        }
+      ],
+      "arkit": {
+        "expectedCount": 52,
+        "presentCount": 52,
+        "missingCount": 0,
+        "present": [
+          "browDownLeft",
+          "browDownRight",
+          "browInnerUp",
+          "browOuterUpLeft",
+          "browOuterUpRight",
+          "cheekPuff",
+          "cheekSquintLeft",
+          "cheekSquintRight",
+          "eyeBlinkLeft",
+          "eyeBlinkRight",
+          "eyeLookDownLeft",
+          "eyeLookDownRight",
+          "eyeLookInLeft",
+          "eyeLookInRight",
+          "eyeLookOutLeft",
+          "eyeLookOutRight",
+          "eyeLookUpLeft",
+          "eyeLookUpRight",
+          "eyeSquintLeft",
+          "eyeSquintRight",
+          "eyeWideLeft",
+          "eyeWideRight",
+          "jawForward",
+          "jawLeft",
+          "jawOpen",
+          "jawRight",
+          "mouthClose",
+          "mouthDimpleLeft",
+          "mouthDimpleRight",
+          "mouthFrownLeft",
+          "mouthFrownRight",
+          "mouthFunnel",
+          "mouthLeft",
+          "mouthLowerDownLeft",
+          "mouthLowerDownRight",
+          "mouthPressLeft",
+          "mouthPressRight",
+          "mouthPucker",
+          "mouthRight",
+          "mouthRollLower",
+          "mouthRollUpper",
+          "mouthShrugLower",
+          "mouthShrugUpper",
+          "mouthSmileLeft",
+          "mouthSmileRight",
+          "mouthStretchLeft",
+          "mouthStretchRight",
+          "mouthUpperUpLeft",
+          "mouthUpperUpRight",
+          "noseSneerLeft",
+          "noseSneerRight",
+          "tongueOut"
+        ],
+        "missing": [],
+        "missingCriticalTargets": [],
+        "usableForRuntime": true
+      }
+    }
+  },
+  "faceMeshIndex": 0,
+  "mappings": [
+    {
+      "arkitName": "browDownLeft",
+      "mode": "proxy",
+      "source": "Fcl_BRW_Angry"
+    },
+    {
+      "arkitName": "browDownRight",
+      "mode": "proxy",
+      "source": "Fcl_BRW_Angry"
+    },
+    {
+      "arkitName": "browInnerUp",
+      "mode": "proxy",
+      "source": "Fcl_BRW_Surprised"
+    },
+    {
+      "arkitName": "browOuterUpLeft",
+      "mode": "proxy",
+      "source": "Fcl_BRW_Joy"
+    },
+    {
+      "arkitName": "browOuterUpRight",
+      "mode": "proxy",
+      "source": "Fcl_BRW_Joy"
+    },
+    {
+      "arkitName": "cheekPuff",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Large"
+    },
+    {
+      "arkitName": "cheekSquintLeft",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Joy"
+    },
+    {
+      "arkitName": "cheekSquintRight",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Joy"
+    },
+    {
+      "arkitName": "eyeBlinkLeft",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Close_L"
+    },
+    {
+      "arkitName": "eyeBlinkRight",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Close_R"
+    },
+    {
+      "arkitName": "eyeLookDownLeft",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookDownRight",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookInLeft",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookInRight",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookOutLeft",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookOutRight",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookUpLeft",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeLookUpRight",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "eyeSquintLeft",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Joy_L"
+    },
+    {
+      "arkitName": "eyeSquintRight",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Joy_R"
+    },
+    {
+      "arkitName": "eyeWideLeft",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Surprised"
+    },
+    {
+      "arkitName": "eyeWideRight",
+      "mode": "proxy",
+      "source": "Fcl_EYE_Surprised"
+    },
+    {
+      "arkitName": "jawForward",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "jawLeft",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "jawOpen",
+      "mode": "proxy",
+      "source": "Fcl_MTH_O"
+    },
+    {
+      "arkitName": "jawRight",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "mouthClose",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Close"
+    },
+    {
+      "arkitName": "mouthDimpleLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Fun"
+    },
+    {
+      "arkitName": "mouthDimpleRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Fun"
+    },
+    {
+      "arkitName": "mouthFrownLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Sorrow"
+    },
+    {
+      "arkitName": "mouthFrownRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Sorrow"
+    },
+    {
+      "arkitName": "mouthFunnel",
+      "mode": "proxy",
+      "source": "Fcl_MTH_O"
+    },
+    {
+      "arkitName": "mouthLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Fun"
+    },
+    {
+      "arkitName": "mouthLowerDownLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_O"
+    },
+    {
+      "arkitName": "mouthLowerDownRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_O"
+    },
+    {
+      "arkitName": "mouthPressLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Small"
+    },
+    {
+      "arkitName": "mouthPressRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Small"
+    },
+    {
+      "arkitName": "mouthPucker",
+      "mode": "proxy",
+      "source": "Fcl_MTH_U"
+    },
+    {
+      "arkitName": "mouthRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Fun"
+    },
+    {
+      "arkitName": "mouthRollLower",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Close"
+    },
+    {
+      "arkitName": "mouthRollUpper",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Close"
+    },
+    {
+      "arkitName": "mouthShrugLower",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Small"
+    },
+    {
+      "arkitName": "mouthShrugUpper",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Small"
+    },
+    {
+      "arkitName": "mouthSmileLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Joy"
+    },
+    {
+      "arkitName": "mouthSmileRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_Joy"
+    },
+    {
+      "arkitName": "mouthStretchLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_E"
+    },
+    {
+      "arkitName": "mouthStretchRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_E"
+    },
+    {
+      "arkitName": "mouthUpperUpLeft",
+      "mode": "proxy",
+      "source": "Fcl_MTH_O"
+    },
+    {
+      "arkitName": "mouthUpperUpRight",
+      "mode": "proxy",
+      "source": "Fcl_MTH_O"
+    },
+    {
+      "arkitName": "noseSneerLeft",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "noseSneerRight",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    },
+    {
+      "arkitName": "tongueOut",
+      "mode": "zero",
+      "source": "zero",
+      "reason": "no reliable VRoid morph source"
+    }
+  ],
+  "licenseAndCredit": {
+    "modelCredit": "Credit required by embedded VRM metadata for John Do / JTL.",
+    "generatedProxyNote": "ARKit target names are local proxy morph targets derived from existing VRoid morph targets; no external face data is embedded.",
+    "redistribution": "Do not redistribute outside the local prototype unless the original VRM license is clarified."
+  }
+}
