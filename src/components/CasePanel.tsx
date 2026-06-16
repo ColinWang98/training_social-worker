@@ -12,7 +12,7 @@ import {
   TrainingViewMode,
 } from '../lib/interviewTypes';
 import { motionCuePrompts } from '../lib/avatarConfig';
-import type { AvatarBlendshapeDebug } from '../App';
+import type { AvatarBlendshapeDebug, AvatarMotionDebug } from '../App';
 
 type CasePanelProps = {
   caseProfile: CaseProfile;
@@ -36,6 +36,7 @@ type CasePanelProps = {
   motionCue: MotionCue;
   statusMessage: string;
   avatarBlendshapeDebug: AvatarBlendshapeDebug | null;
+  avatarMotionDebug: AvatarMotionDebug | null;
   onCaseChange: (caseId: string) => void;
   onEndSession: () => void;
   onSimulationMethodChange: (method: SimulationMethod) => void;
@@ -65,6 +66,7 @@ export function CasePanel({
   motionCue,
   statusMessage,
   avatarBlendshapeDebug,
+  avatarMotionDebug,
   onCaseChange,
   onEndSession,
   onSimulationMethodChange,
@@ -484,6 +486,27 @@ export function CasePanel({
                   <DirectiveItem label="眉部權重" value={`${Math.round(avatarBlendshapeDebug.browWeight * 100)}%`} />
                   <DirectiveItem label="眼部權重" value={`${Math.round(avatarBlendshapeDebug.eyeWeight * 100)}%`} />
                 </div>
+              </div>
+            )}
+            {avatarMotionDebug && (
+              <div className="realismBox" aria-label="Avatar Motion Lab">
+                <h3>Avatar Motion Lab</h3>
+                <div className="avatarDirectiveGrid">
+                  <DirectiveItem label="語言" value={avatarMotionDebug.motionLanguage} />
+                  <DirectiveItem label="Script" value={avatarMotionDebug.activeScriptId} />
+                  <DirectiveItem label="Variant" value={avatarMotionDebug.activeVariant} />
+                  <DirectiveItem label="Validation" value={avatarMotionDebug.validationStatus} />
+                  <DirectiveItem label="Keyframes" value={`${avatarMotionDebug.keyframeCount}`} />
+                  <DirectiveItem label="Duration" value={`${avatarMotionDebug.durationMs}ms`} />
+                  <DirectiveItem label="Family" value={avatarMotionDebug.reactionFamily} />
+                  <DirectiveItem label="Reaction" value={`${Math.round(avatarMotionDebug.reactionWeight * 100)}%`} />
+                  <DirectiveItem label="Bridge" value={`${Math.round(avatarMotionDebug.bridgeProgress * 100)}%`} />
+                  <DirectiveItem label="坐姿安全" value={avatarMotionDebug.seatedSafety} />
+                </div>
+                {avatarMotionDebug.validationIssues.length > 0 && (
+                  <TagRow label="Validation issues" values={avatarMotionDebug.validationIssues.slice(0, 4)} />
+                )}
+                <TagRow label="最近動作" values={avatarMotionDebug.recentMotionHistory} />
               </div>
             )}
             {realismAssessment && (

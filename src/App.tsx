@@ -43,6 +43,21 @@ export type AvatarBlendshapeDebug = {
   eyeWeight: number;
 };
 
+export type AvatarMotionDebug = {
+  motionLanguage: string;
+  activeScriptId: string;
+  activeVariant: string;
+  validationStatus: 'ok' | 'fallback';
+  validationIssues: string[];
+  keyframeCount: number;
+  durationMs: number;
+  reactionFamily: string;
+  reactionWeight: number;
+  bridgeProgress: number;
+  recentMotionHistory: string[];
+  seatedSafety: string;
+};
+
 export default function App() {
   const [activePage, setActivePage] = useState(() => (window.location.hash === '#evidence-cards' ? 'evidence-cards' : 'training'));
   const [caseProfile, setCaseProfile] = useState<CaseProfile>(johnDoCase);
@@ -58,6 +73,7 @@ export default function App() {
   const [vrmaFile, setVrmaFile] = useState<File | null>(null);
   const [statusMessage, setStatusMessage] = useState('正在載入 VRM 模型...');
   const [avatarBlendshapeDebug, setAvatarBlendshapeDebug] = useState<AvatarBlendshapeDebug | null>(null);
+  const [avatarMotionDebug, setAvatarMotionDebug] = useState<AvatarMotionDebug | null>(null);
   const [motionCue, setMotionCue] = useState<MotionCue>('neutral');
   const [simulationMethod, setSimulationMethod] = useState<SimulationMethod>('social_work_default');
   const [retrievalOptions, setRetrievalOptions] = useState<RetrievalOptions>({ embeddingEnabled: false });
@@ -270,9 +286,14 @@ export default function App() {
     };
   }, [latestClientResponse, playTtsForResponse]);
 
-  const handleStatusChange = useCallback((status: { message: string; blendshapeDebug?: AvatarBlendshapeDebug }) => {
-    setStatusMessage(status.message);
+  const handleStatusChange = useCallback((status: {
+    message?: string;
+    blendshapeDebug?: AvatarBlendshapeDebug;
+    motionDebug?: AvatarMotionDebug;
+  }) => {
+    if (status.message) setStatusMessage(status.message);
     if (status.blendshapeDebug) setAvatarBlendshapeDebug(status.blendshapeDebug);
+    if (status.motionDebug) setAvatarMotionDebug(status.motionDebug);
   }, []);
 
   useEffect(() => {
@@ -704,6 +725,7 @@ export default function App() {
         motionCue={motionCue}
         statusMessage={statusMessage}
         avatarBlendshapeDebug={avatarBlendshapeDebug}
+        avatarMotionDebug={avatarMotionDebug}
         postSessionReport={postSessionReport}
         isFinalReviewPending={isFinalReviewPending}
         canEndSession={turns.some((turn) => turn.speaker === 'student') && !sessionEnded}

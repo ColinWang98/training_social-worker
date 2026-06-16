@@ -26,13 +26,21 @@ import {
   AvatarPerformancePlan,
   MotionCue,
 } from '../lib/interviewTypes';
-import type { AvatarBlendshapeDebug } from '../App';
+import {
+  compileSeatedMotionScript,
+  sampleSeatedMotionProgram,
+  seatedMotionScriptTemplate,
+  SeatedMotionProgram,
+  SeatedMotionSample,
+} from '../lib/seatedMotionLanguage';
+import type { AvatarBlendshapeDebug, AvatarMotionDebug } from '../App';
 
 type StageStatus = {
-  avatarLoaded: boolean;
-  vrmaLoaded: boolean;
-  message: string;
+  avatarLoaded?: boolean;
+  vrmaLoaded?: boolean;
+  message?: string;
   blendshapeDebug?: AvatarBlendshapeDebug;
+  motionDebug?: AvatarMotionDebug;
 };
 
 type AvatarClipManifestEntry = {
@@ -135,6 +143,7 @@ export function VrmStage({
   const manualVrmaActiveRef = useRef(false);
   const activeReactionInstanceRef = useRef<string | null>(null);
   const performanceControllerRef = useRef(createAvatarPerformanceController());
+  const seatedMotionScriptControllerRef = useRef(createSeatedMotionScriptController());
   const motionControllerRef = useRef(createAvatarMotionController());
   const safePoseRuntimeRef = useRef(createSafeNormalizedPoseRuntime());
   const seatedRuntimeAvailableRef = useRef(true);
@@ -526,6 +535,7 @@ export function VrmStage({
       const elapsed = clock.elapsedTime;
       tickCount += 1;
       let expressionReactionPulse = 0;
+      let motionRuntimeDebug: AvatarMotionDebug | undefined;
       controls.update();
       mixerRef.current?.update(delta);
       if (vrmRef.current) {
@@ -570,7 +580,21 @@ export function VrmStage({
           priorityRef.current,
         );
         const idleBlendedPose = addIdleToBlendedPose(blendedPose, idlePulse);
-        const proceduralReactionPose = performanceState.activeReactionClipId
+        const scriptedMotion = seatedMotionScriptControllerRef.current.update(
+          performancePlanRef.current,
+          reactionKeyRef.current,
+          performanceState,
+          activeIntensity,
+        );
+        motionRuntimeDebug = scriptedMotion.debug;
+        const scriptedReactionPose = scriptedMotion.sample
+          ? addSeatedMotionOverlay(
+            idleBlendedPose,
+            scriptedMotion.sample,
+            performanceState.reactionWeight,
+          )
+          : undefined;
+        const proceduralReactionPose = !scriptedReactionPose && performanceState.activeReactionClipId
           ? proceduralClipPose(
             performanceState.activeReactionClipId,
             activeCue,
@@ -581,9 +605,14 @@ export function VrmStage({
             performanceState.mirror,
           )
           : undefined;
-        const finalPose = proceduralReactionPose
+        const finalPose = scriptedReactionPose
+          ? scriptedReactionPose
+          : proceduralReactionPose
           ? blendBlendedPose(idleBlendedPose, proceduralReactionPose, performanceState.reactionWeight)
           : idleBlendedPose;
+        const activeGazeCue = scriptedMotion.sample
+          ? motionCueForScriptedGaze(scriptedMotion.sample.gaze, activeCue)
+          : activeCue;
         const upperBodyAnimationActive = policyActionActiveRef.current || manualVrmaActiveRef.current;
         if (ENABLE_SEATED_BONE_RUNTIME && seatedRuntimeAvailableRef.current) {
           const isConservativeRig = vrmRef.current.scene.userData.rigProfile === 'vrm0Conservative';
@@ -633,7 +662,7 @@ export function VrmStage({
         updateGazeTarget(
           camera,
           gazeTarget,
-          activeCue,
+          activeGazeCue,
           activeIntensity,
           residualReactionPulse,
           elapsed,
@@ -673,6 +702,13 @@ export function VrmStage({
           vrmBounds,
           stagePath: avatarPath,
         });
+        if (motionRuntimeDebug) {
+          onStatusChange({
+            avatarLoaded: Boolean(vrmRef.current),
+            vrmaLoaded: Boolean(policyActionActiveRef.current || manualVrmaActiveRef.current),
+            motionDebug: motionRuntimeDebug,
+          });
+        }
       }
       frameId = requestAnimationFrame(tick);
     };
@@ -900,6 +936,76 @@ type AvatarPerformanceState = {
   phaseOffset: number;
   motionScale: number;
 };
+
+function createSeatedMotionScriptController() {
+  let activeReactionId = '';
+  let activeProgram: SeatedMotionProgram | null = null;
+  let activeScriptId = 'none';
+  let activeVariant = 'none';
+  let validationIssues: string[] = [];
+  const recentMotionHistory: string[] = [];
+
+  return {
+    update(
+      plan: AvatarPerformancePlan | undefined,
+      reactionKey: string,
+      performanceState: AvatarPerformanceState,
+      activeIntensity: number,
+    ): { sample?: SeatedMotionSample; debug: AvatarMotionDebug } {
+      const nextReactionId = plan?.reactionInstanceId ?? reactionKey;
+      if (nextReactionId && nextReactionId !== activeReactionId) {
+        activeReactionId = nextReactionId;
+        const family = plan?.reactionFamily ?? 'soft_engagement';
+        const seed = plan?.variantSeed ?? plan?.reactionInstanceId ?? reactionKey;
+        const template = plan?.motionScript
+          ? {
+              id: plan.motionScriptId ?? `custom_${family}`,
+              script: plan.motionScript,
+              variant: 'custom',
+            }
+          : seatedMotionScriptTemplate(family, {
+              seed,
+              intensity: plan?.motionScale ?? activeIntensity,
+            });
+        const result = compileSeatedMotionScript(template.script, {
+          id: plan?.motionScriptId ?? template.id,
+          language: plan?.motionLanguage ?? 'seated-v1',
+        });
+        activeScriptId = plan?.motionScriptId ?? template.id;
+        activeVariant = template.variant;
+        validationIssues = result.issues.map((issue) => issue.message);
+        activeProgram = result.ok ? result.program : null;
+        if (activeProgram) {
+          recentMotionHistory.unshift(activeProgram.id);
+          recentMotionHistory.splice(5);
+        }
+      }
+
+      const sample = activeProgram && performanceState.reactionWeight > 0.001
+        ? sampleSeatedMotionProgram(
+            activeProgram,
+            performanceState.localReactionTime,
+            Math.min(1, Math.max(0.2, performanceState.motionScale)),
+          )
+        : undefined;
+      const debug: AvatarMotionDebug = {
+        motionLanguage: plan?.motionLanguage ?? 'seated-v1',
+        activeScriptId,
+        activeVariant,
+        validationStatus: activeProgram ? 'ok' : 'fallback',
+        validationIssues,
+        keyframeCount: activeProgram?.keyframes.length ?? 0,
+        durationMs: activeProgram?.durationMs ?? 0,
+        reactionFamily: plan?.reactionFamily ?? 'soft_engagement',
+        reactionWeight: performanceState.reactionWeight,
+        bridgeProgress: performanceState.bridgeProgress,
+        recentMotionHistory: [...recentMotionHistory],
+        seatedSafety: plan?.seatedSafety ?? 'forced_seated_lower_body',
+      };
+      return { sample, debug };
+    },
+  };
+}
 
 function createAvatarPerformanceController() {
   let lastReactionKey = '';
@@ -1204,6 +1310,32 @@ function addIdleToBlendedPose(base: BlendedPose, idle: BlendedPose): BlendedPose
   };
 }
 
+function addSeatedMotionOverlay(
+  base: BlendedPose,
+  sample: SeatedMotionSample,
+  weight: number,
+): BlendedPose {
+  const w = Math.max(0, Math.min(1, weight));
+  return {
+    pose: addPartialRecord(base.pose, sample.pose, w),
+    armPose: addPartialRecord(base.armPose, sample.armPose, w),
+  };
+}
+
+function addPartialRecord<T extends Record<string, number>>(
+  base: T,
+  add: Partial<Record<keyof T, number>>,
+  weight: number,
+): T {
+  const next = { ...base };
+  Object.entries(add).forEach(([key, value]) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+    const typedKey = key as keyof T;
+    next[typedKey] = (next[typedKey] + value * weight) as T[keyof T];
+  });
+  return next;
+}
+
 function proceduralClipPose(
   clipId: string,
   fallbackCue: MotionCue,
@@ -1304,6 +1436,16 @@ function proceduralClipPose(
 
   const next = { pose, armPose };
   return mirror ? mirrorBlendedPose(next) : next;
+}
+
+function motionCueForScriptedGaze(
+  gaze: SeatedMotionSample['gaze'] | undefined,
+  fallback: MotionCue,
+): MotionCue {
+  if (gaze === 'look_down') return 'look_down';
+  if (gaze === 'avoid_left' || gaze === 'avoid_right' || gaze === 'scanning') return 'avoid_eye_contact';
+  if (gaze === 'guarded') return 'lean_back';
+  return fallback;
 }
 
 function blendBlendedPose(base: BlendedPose, target: BlendedPose, weight: number): BlendedPose {

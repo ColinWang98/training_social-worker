@@ -35,6 +35,14 @@ export type ResistanceLevel = 'none' | 'mild' | 'moderate' | 'high';
 export type AvatarDirectivePriority = 'safety' | 'reaction' | 'speaking' | 'idle';
 export type TrainingViewMode = 'trainee' | 'instructor';
 export type AvatarGazePattern = 'camera_soft' | 'avoidant' | 'downward' | 'scanning' | 'guarded';
+export type AvatarReactionFamily =
+  | 'defensive'
+  | 'withdrawn'
+  | 'anxious'
+  | 'ashamed'
+  | 'reflective'
+  | 'risk'
+  | 'soft_engagement';
 
 export type EvidenceSource =
   | 'annomi'
@@ -118,10 +126,14 @@ export type AvatarPerformancePlan = {
   releaseMs: number;
   motionScale: number;
   fallbackUsed?: boolean;
-  reactionFamily?: 'defensive' | 'withdrawn' | 'anxious' | 'ashamed' | 'reflective' | 'risk' | 'soft_engagement';
+  motionLanguage?: 'seated-v1';
+  motionScriptId?: string;
+  motionScript?: string;
+  reactionFamily?: AvatarReactionFamily;
   preferredClipIds?: string[];
   excludedRecentClipIds?: string[];
   variantPolicy?: 'avoid_recent' | 'soft_random';
+  variantSeed?: string;
   returnBridgeMs?: number;
   attackMs?: number;
   releaseCurve?: 'soft' | 'guarded' | 'low_energy';

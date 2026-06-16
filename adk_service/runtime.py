@@ -4139,8 +4139,9 @@ def avatar_performance_plan(
         release_ms = 700
         return_bridge_ms = 700
         release_curve = "soft"
+    reaction_instance_id = f"reaction-{uuid.uuid4().hex[:12]}"
     return {
-        "reactionInstanceId": f"reaction-{uuid.uuid4().hex[:12]}",
+        "reactionInstanceId": reaction_instance_id,
         "baselineIdleClipId": baseline_idle_clip,
         "baselineClipId": baseline_clip,
         "reactionClipId": reaction_clip,
@@ -4156,9 +4157,12 @@ def avatar_performance_plan(
         "releaseMs": release_ms,
         "motionScale": round(min(0.55 if high_risk else 0.88, max(0.25, intensity)), 2),
         "fallbackUsed": fallback_used,
+        "motionLanguage": "seated-v1",
+        "motionScriptId": f"sml_{reaction_family}_{'low' if high_risk else 'standard'}",
         "reactionFamily": reaction_family,
         "preferredClipIds": preferred_clips,
         "variantPolicy": "avoid_recent",
+        "variantSeed": reaction_instance_id,
         "returnBridgeMs": return_bridge_ms,
         "attackMs": max(180, min(transition_ms, 520)),
         "releaseCurve": release_curve,
