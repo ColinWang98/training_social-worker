@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CasePanel } from './components/CasePanel';
+import { EvidenceCardsPage } from './components/EvidenceCardsPage';
 import { InterviewPanel } from './components/InterviewPanel';
 import { VrmStage } from './components/VrmStage';
 import { requestClientResponse, requestFinalReview, requestTtsAudio, startSession, TtsResponse } from './lib/apiClient';
@@ -43,6 +44,7 @@ export type AvatarBlendshapeDebug = {
 };
 
 export default function App() {
+  const [activePage, setActivePage] = useState(() => (window.location.hash === '#evidence-cards' ? 'evidence-cards' : 'training'));
   const [caseProfile, setCaseProfile] = useState<CaseProfile>(johnDoCase);
   const [turns, setTurns] = useState<InterviewTurn[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -93,6 +95,14 @@ export default function App() {
     () => avatarAssets.find((asset) => asset.id === avatarAssetId) ?? avatarAssets[0],
     [avatarAssetId],
   );
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActivePage(window.location.hash === '#evidence-cards' ? 'evidence-cards' : 'training');
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const expressionWeights = useMemo<ExpressionWeights>(
     () => {
@@ -564,6 +574,17 @@ export default function App() {
     }
   }, [caseProfile, isFinalReviewPending, isPending, sessionId, stopPlayback, stopVoiceCapture, turns]);
 
+  if (activePage === 'evidence-cards') {
+    return (
+      <EvidenceCardsPage
+        onBack={() => {
+          window.location.hash = '';
+          setActivePage('training');
+        }}
+      />
+    );
+  }
+
   return (
     <main className="appShell">
       <section className="avatarColumn" aria-label="Avatar preview">
@@ -593,6 +614,16 @@ export default function App() {
             </select>
             <span>{selectedAvatar.localUseNote}</span>
             <span>{selectedAvatar.ttsVoiceLabel ?? '環境預設粵語聲線'}</span>
+            <button
+              type="button"
+              className="headerSecondaryButton"
+              onClick={() => {
+                window.location.hash = 'evidence-cards';
+                setActivePage('evidence-cards');
+              }}
+            >
+              Evidence Cards
+            </button>
             <button
               type="button"
               className="shutdownButton"
@@ -664,6 +695,8 @@ export default function App() {
         adaptivePolicySnapshot={latestClientResponse?.adaptivePolicySnapshot ?? null}
         sessionContinuitySnapshot={latestClientResponse?.sessionContinuitySnapshot ?? null}
         contextConsistencyAssessment={latestClientResponse?.contextConsistencyAssessment ?? null}
+        profileGroundingSnapshot={latestClientResponse?.profileGroundingSnapshot ?? null}
+        pieContextSnapshot={latestClientResponse?.pieContextSnapshot ?? null}
         simulationMethod={simulationMethod}
         retrievalOptions={retrievalOptions}
         simulationStrategySnapshot={latestClientResponse?.simulationStrategySnapshot ?? null}

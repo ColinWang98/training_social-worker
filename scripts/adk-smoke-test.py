@@ -153,6 +153,14 @@ async def main() -> None:
         raise RuntimeError("final-review competencyScores.engagement must be numeric.")
     if not isinstance(final_report.get("processReview", {}).get("turningPoints"), list):
         raise RuntimeError("final-review processReview.turningPoints must be a list.")
+    hk_pcf = final_report.get("hkPcfAssessment") or {}
+    hk_scores = hk_pcf.get("scores") or {}
+    if not isinstance(hk_scores.get("engagementAndRelationship"), (int, float)):
+        raise RuntimeError("final-review hkPcfAssessment.scores.engagementAndRelationship must be numeric.")
+    if not isinstance(hk_scores.get("riskSafetyAndSafeguarding"), (int, float)):
+        raise RuntimeError("final-review hkPcfAssessment.scores.riskSafetyAndSafeguarding must be numeric.")
+    if not isinstance(hk_pcf.get("disclaimer"), str) or "SWRB" not in hk_pcf.get("disclaimer", ""):
+        raise RuntimeError("final-review hkPcfAssessment.disclaimer must state SWRB limitation.")
     print(
         json.dumps(
             {
@@ -179,6 +187,8 @@ async def main() -> None:
                 "finalReview": {
                     "overallSummary": final_report.get("overallSummary"),
                     "engagement": final_report.get("competencyScores", {}).get("engagement"),
+                    "hkPcfEngagement": hk_scores.get("engagementAndRelationship"),
+                    "hkPcfRiskSafety": hk_scores.get("riskSafetyAndSafeguarding"),
                     "turningPoints": len(final_report.get("processReview", {}).get("turningPoints", [])),
                 },
             },

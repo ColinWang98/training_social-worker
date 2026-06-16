@@ -1,0 +1,80 @@
+{
+  "social_work_default": {
+    "id": "social_work_default",
+    "label": "Social Work Default",
+    "description": "Default social-work interview simulation with person-in-environment, trainee skill response, and risk/protective factors.",
+    "promptSections": ["base_client_rules", "person_in_environment", "adaptive_policy", "session_continuity", "evidence_cards"],
+    "promptFocus": ["person_in_environment", "trainee_skill_response", "risk_protective_factors"],
+    "policyWeights": {},
+    "responseConstraints": ["保持現有社工訓練主流程。"],
+    "retrievalBoostSources": [],
+    "retrievalBoostTags": [],
+    "evaluatorFocus": ["clientRealism", "riskGating", "socialWorkInterviewQuality"],
+    "compatibleCaseTypes": ["alcohol_misuse", "student_depression_bullying", "anxiety_family_invalidated", "substance_recovery_meth", "trauma_sleep_low_self_worth"]
+  },
+  "adaptive_vp": {
+    "id": "adaptive_vp",
+    "label": "Adaptive-VP",
+    "description": "Strengthens trainee-driven response policy: the student's tone and interviewing quality visibly affect resistance, openness, and disclosure depth.",
+    "promptSections": ["base_client_rules", "adaptive_vp_constraints", "adaptive_policy", "session_continuity", "evidence_cards"],
+    "promptFocus": ["trainee_driven_response", "resistance_shift", "disclosure_boundary"],
+    "policyWeights": {"studentMoveImpact": 1.25, "disclosurePacing": 1.15},
+    "responseConstraints": ["學生話術必須明顯影響阻抗、開放度和透露深度。"],
+    "retrievalBoostSources": ["esconv", "annomi"],
+    "retrievalBoostTags": ["resistance", "support", "reflection", "ambivalence"],
+    "evaluatorFocus": ["disclosurePacing", "sessionContinuity", "socialWorkInterviewQuality"],
+    "compatibleCaseTypes": ["alcohol_misuse", "student_depression_bullying", "anxiety_family_invalidated", "substance_recovery_meth", "trauma_sleep_low_self_worth"]
+  },
+  "consistent_mi": {
+    "id": "consistent_mi",
+    "label": "Consistent MI",
+    "description": "Strengthens motivational interviewing progression, sustain talk, ambivalence, and change talk consistency.",
+    "promptSections": ["base_client_rules", "consistent_mi_constraints", "adaptive_policy", "session_continuity", "evidence_cards"],
+    "promptFocus": ["motivational_interviewing", "change_talk", "sustain_talk"],
+    "policyWeights": {"changeTalkPacing": 1.25, "resistanceConsistency": 1.1},
+    "responseConstraints": ["change talk 只能由同理、反映或矛盾探索逐步引出。"],
+    "retrievalBoostSources": ["annomi", "multilingual_therapy"],
+    "retrievalBoostTags": ["alcohol", "ambivalence", "change talk", "substance_use"],
+    "evaluatorFocus": ["clientRealism", "disclosurePacing", "socialWorkInterviewQuality"],
+    "compatibleCaseTypes": ["alcohol_misuse", "substance_recovery_meth"]
+  },
+  "patient_psi_context": {
+    "id": "patient_psi_context",
+    "label": "Patient-PSI Context",
+    "description": "Strengthens cognitive/context model and self-report grounded profile consistency.",
+    "promptSections": ["base_client_rules", "patient_psi_context_constraints", "profile_grounding", "adaptive_policy", "session_continuity", "evidence_cards"],
+    "promptFocus": ["cognitive_context_model", "self_report_grounding", "core_beliefs"],
+    "policyWeights": {"contextConsistency": 1.3, "profileGrounding": 1.2},
+    "responseConstraints": ["回答必須符合個案自我敘事、核心信念、羞恥觸發和求助信念。"],
+    "retrievalBoostSources": ["multilingual_therapy", "counsel_chat"],
+    "retrievalBoostTags": ["family", "trauma", "self-worth", "anxiety", "sleep"],
+    "evaluatorFocus": ["contextConsistency", "clientRealism", "corpusGrounding"],
+    "compatibleCaseTypes": ["alcohol_misuse", "student_depression_bullying", "anxiety_family_invalidated", "substance_recovery_meth", "trauma_sleep_low_self_worth"]
+  },
+  "roleplay_doh": {
+    "id": "roleplay_doh",
+    "label": "Roleplay DOH",
+    "description": "Strengthens roleplay fidelity, natural service-user voice, and avoidance of textbook narration.",
+    "promptSections": ["base_client_rules", "roleplay_doh_constraints", "adaptive_policy", "session_continuity", "evidence_cards"],
+    "promptFocus": ["roleplay_fidelity", "natural_cantonese", "non_textbook_client_voice"],
+    "policyWeights": {"naturalness": 1.25, "brevity": 1.1},
+    "responseConstraints": ["避免旁白、治療師語氣、完整理性分析；保持服務對象口語短句。"],
+    "retrievalBoostSources": ["esconv", "empathetic_dialogues"],
+    "retrievalBoostTags": ["ashamed", "afraid", "angry", "sad", "avoidance"],
+    "evaluatorFocus": ["clientRealism", "avatarAlignment", "corpusGrounding"],
+    "compatibleCaseTypes": ["alcohol_misuse", "student_depression_bullying", "anxiety_family_invalidated", "substance_recovery_meth", "trauma_sleep_low_self_worth"]
+  },
+  "annaagent_memory": {
+    "id": "annaagent_memory",
+    "label": "AnnaAgent Memory",
+    "description": "Strengthens session continuity, relationship memory, rupture/repair, and recurring language patterns.",
+    "promptSections": ["base_client_rules", "annaagent_memory_constraints", "adaptive_policy", "session_continuity", "evidence_cards"],
+    "promptFocus": ["session_memory", "relationship_memory", "rupture_repair"],
+    "policyWeights": {"sessionContinuity": 1.35, "ruptureRepair": 1.25},
+    "responseConstraints": ["必須延續前文關係記憶，尤其是冒犯、道歉、已透露 facts 和迴避話題。"],
+    "retrievalBoostSources": ["esconv", "annomi"],
+    "retrievalBoostTags": ["rupture", "repair", "trust", "avoidance", "support"],
+    "evaluatorFocus": ["sessionContinuity", "contextConsistency", "avatarAlignment"],
+    "compatibleCaseTypes": ["alcohol_misuse", "student_depression_bullying", "anxiety_family_invalidated", "substance_recovery_meth", "trauma_sleep_low_self_worth"]
+  }
+}

@@ -71,6 +71,24 @@ SIMULATION_METHODS = {
     "roleplay_doh",
     "annaagent_memory",
 }
+HK_PCF_DOMAINS = [
+    "engagementAndRelationship",
+    "assessmentAndInformationGathering",
+    "personInEnvironmentAndHongKongContext",
+    "ethicsConfidentialityAndBoundaries",
+    "selfDeterminationAndInformedChoice",
+    "diversityAntiDiscriminationAndCulturalSensitivity",
+    "riskSafetyAndSafeguarding",
+    "interventionPlanningAndReferral",
+    "professionalReflectionAndUseOfSupervision",
+]
+HK_PCF_FRAMEWORK_LABEL = "參考香港社工專業操守、社工教育能力要求及本地實務語境的訓練評估"
+HK_PCF_DISCLAIMER = "此報告為本地教學/研究 prototype，不代表 SWRB 官方評核或註冊資格判定。"
+HK_PCF_FRAMEWORK_BASIS = [
+    "SWRB Code of Practice：專業操守、保密、自決、文化敏感、界線與服務對象利益。",
+    "SWRB PCS 8th Edition：ethical practice、human rights/social justice、diversity、knowledge and skills for practice、professional development。",
+    "本地社工訪談訓練脈絡：人在情境、風險與保護因素、轉介及安全下一步。",
+]
 
 METHOD_STRATEGIES: dict[str, dict[str, Any]] = {
     "social_work_default": {
@@ -133,6 +151,147 @@ def load_local_env(path: Path) -> None:
             continue
         key, value = stripped.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+class PromptRegistry:
+    def __init__(self, root_dir: Path) -> None:
+        self.root_dir = root_dir
+        self.registry_dir = root_dir / "adk_service" / "prompt_registry"
+        self._cache: dict[str, Any] = {}
+
+    def load(self, relative_path: str, fallback: Any | None = None) -> Any:
+        key = relative_path.replace("\\", "/")
+        if key in self._cache:
+            return self._cache[key]
+        path = self.registry_dir / key
+        if not path.exists():
+            if fallback is not None:
+                self._cache[key] = fallback
+                return fallback
+            raise FileNotFoundError(f"Missing prompt registry file: {path}")
+        value = json.loads(path.read_text("utf-8"))
+        self._cache[key] = value
+        return value
+
+    def strategy_methods(self) -> dict[str, dict[str, Any]]:
+        raw = self.load("strategy/simulation_methods.json", METHOD_STRATEGIES)
+        if not isinstance(raw, dict):
+            return METHOD_STRATEGIES
+        return {key: value for key, value in raw.items() if isinstance(value, dict)}
+
+    def client_prompt(self) -> dict[str, Any]:
+        return self.load("client/social_work_client.json", {})
+
+    def realism_repair(self) -> dict[str, Any]:
+        return self.load("realism/repair.json", {})
+
+    def post_session_supervisor(self) -> dict[str, Any]:
+        return self.load("supervisor/post_session.json", {})
+
+    @staticmethod
+    def render_lines(lines: list[Any], prefix: str = "- ") -> str:
+        return "\n".join(f"{prefix}{line}" for line in lines if isinstance(line, str) and line.strip())
+
+
+DEFAULT_PROMPT_REGISTRY = PromptRegistry(Path(__file__).resolve().parents[1])
+
+
+def load_active_grounding_profile(root_dir: Path, case_profile: dict[str, Any]) -> dict[str, Any]:
+    case_type = case_profile.get("caseType")
+    if not isinstance(case_type, str) or not case_type:
+        return {}
+    profile_dir = root_dir / "data" / "profiles" / case_type
+    legacy_dir = root_dir / "data" / "profiles"
+    candidates = [
+        profile_dir / "active.json",
+        profile_dir / f"{case_type}-case_spec_corpus.json",
+        profile_dir / f"{case_type}-synthetic_interview.json",
+        legacy_dir / f"{case_type}-case_spec_corpus.json",
+        legacy_dir / f"{case_type}-synthetic_interview.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            value = json.loads(path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            value.setdefault("profilePath", str(path.relative_to(root_dir)))
+            return value
+    return {}
+
+
+def summarize_grounding_profile(profile: dict[str, Any]) -> dict[str, Any] | None:
+    if not profile:
+        return None
+    reflections = profile.get("caseReflections") if isinstance(profile.get("caseReflections"), dict) else {}
+    source_summary = profile.get("sourceEvidenceSummary") if isinstance(profile.get("sourceEvidenceSummary"), dict) else {}
+    return {
+        "profileId": profile.get("profileId"),
+        "caseType": profile.get("caseType"),
+        "generationMode": profile.get("generationMode"),
+        "profilePath": profile.get("profilePath"),
+        "reflectionKeys": sorted(reflections.keys()) if reflections else [],
+        "sourceEvidenceSummary": {
+            "cardCount": source_summary.get("cardCount"),
+            "topIssueTags": source_summary.get("topIssueTags", []),
+            "sources": source_summary.get("sources", {}),
+        },
+        "adaptationCount": len(profile.get("adaptationLog") or []),
+    }
+
+
+def summarize_pie_context(profile: dict[str, Any], case_profile: dict[str, Any]) -> dict[str, Any]:
+    pie = profile.get("personInEnvironment") if isinstance(profile.get("personInEnvironment"), dict) else {}
+    micro = profile.get("microSystem") if isinstance(profile.get("microSystem"), dict) else {}
+    meso = profile.get("mesoSystem") if isinstance(profile.get("mesoSystem"), dict) else {}
+    macro = profile.get("macroSystem") if isinstance(profile.get("macroSystem"), dict) else {}
+    if not profile:
+        context = case_profile.get("socialWorkContextModel", {}) if isinstance(case_profile.get("socialWorkContextModel"), dict) else {}
+        return {
+            "source": "case_spec",
+            "personInEnvironment": {
+                "person": context.get("selfNarrative", ""),
+                "environment": unique_strings([
+                    *context.get("relationshipExpectations", []),
+                    *case_profile.get("issueTags", []),
+                ])[:8],
+            },
+            "microSystem": {},
+            "mesoSystem": {},
+            "macroSystem": {},
+        }
+    return {
+        "source": "grounding_profile",
+        "personInEnvironment": pie,
+        "microSystem": micro,
+        "mesoSystem": meso,
+        "macroSystem": macro,
+    }
+
+
+def compact_profile_for_prompt(profile: dict[str, Any]) -> dict[str, Any]:
+    if not profile:
+        return {}
+    return {
+        "profileId": profile.get("profileId"),
+        "generationMode": profile.get("generationMode"),
+        "selfReportGrounding": profile.get("selfReportGrounding"),
+        "lifeHistory": profile.get("lifeHistory"),
+        "familySchoolWorkContext": profile.get("familySchoolWorkContext"),
+        "relationshipHistory": profile.get("relationshipHistory"),
+        "valuesFearsShameTriggers": profile.get("valuesFearsShameTriggers"),
+        "avoidancePatterns": profile.get("avoidancePatterns"),
+        "speechStyle": profile.get("speechStyle"),
+        "caseReflections": profile.get("caseReflections"),
+        "personInEnvironment": profile.get("personInEnvironment"),
+        "microSystem": profile.get("microSystem"),
+        "mesoSystem": profile.get("mesoSystem"),
+        "macroSystem": profile.get("macroSystem"),
+        "adaptationLog": profile.get("adaptationLog", [])[-3:],
+        "sourceEvidenceSummary": profile.get("sourceEvidenceSummary"),
+    }
 
 
 def supabase_database_url() -> str | None:
@@ -554,6 +713,47 @@ class AgentSessionStore:
             ).fetchall()
         return [self._event_from_row(row) for row in rows]
 
+    def session_record(self, session_id: str, limit: int = 500) -> dict[str, Any]:
+        session_row: Any = None
+        if self.pg_pool:
+            with self.pg_pool.connection() as conn:
+                session_row = conn.execute(
+                    """
+                    SELECT session_id, case_id, case_profile_json, created_at, updated_at
+                    FROM simulator_sessions
+                    WHERE session_id = %s
+                    """,
+                    (session_id,),
+                ).fetchone()
+        else:
+            with self._connect() as db:
+                db.row_factory = sqlite3.Row
+                session_row = db.execute(
+                    """
+                    SELECT session_id, case_id, case_profile_json, created_at, updated_at
+                    FROM simulator_sessions
+                    WHERE session_id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+        if not session_row:
+            raise ValueError(f"Session not found: {session_id}")
+
+        case_profile = session_row["case_profile_json"] if isinstance(session_row, dict) else session_row["case_profile_json"]
+        if isinstance(case_profile, str):
+            try:
+                case_profile = json.loads(case_profile)
+            except json.JSONDecodeError:
+                case_profile = {}
+        return {
+            "sessionId": session_row["session_id"] if isinstance(session_row, dict) else session_row["session_id"],
+            "caseId": session_row["case_id"] if isinstance(session_row, dict) else session_row["case_id"],
+            "caseProfile": case_profile if isinstance(case_profile, dict) else {},
+            "createdAt": session_row["created_at"] if isinstance(session_row, dict) else session_row["created_at"],
+            "updatedAt": session_row["updated_at"] if isinstance(session_row, dict) else session_row["updated_at"],
+            "events": self.session_events(session_id, limit=limit),
+        }
+
     def _event_from_row(self, row: Any) -> dict[str, Any]:
         payload = row["payload_json"] if isinstance(row, dict) else row["payload_json"]
         if isinstance(payload, str):
@@ -569,16 +769,18 @@ class AgentSessionStore:
 
 
 class SimulationStrategyService(ManagedAgent):
-    def __init__(self) -> None:
+    def __init__(self, registry: PromptRegistry | None = None) -> None:
         super().__init__(
             "SimulationStrategyService",
             "Select simulation method policy without changing the coordinator API contract.",
             os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
             False,
         )
+        self.registry = registry or DEFAULT_PROMPT_REGISTRY
+        self.methods = self.registry.strategy_methods()
 
     def normalize_method(self, value: Any) -> str:
-        return value if isinstance(value, str) and value in SIMULATION_METHODS else "social_work_default"
+        return value if isinstance(value, str) and value in self.methods else "social_work_default"
 
     def run(
         self,
@@ -588,12 +790,13 @@ class SimulationStrategyService(ManagedAgent):
         session_continuity: dict[str, Any],
     ) -> dict[str, Any]:
         normalized = self.normalize_method(method)
-        base = dict(METHOD_STRATEGIES[normalized])
+        base = dict(self.methods.get(normalized) or METHOD_STRATEGIES["social_work_default"])
         constraints = list(base.get("responseConstraints", []))
         prompt_focus = list(base.get("promptFocus", []))
         retrieval_sources = list(base.get("retrievalBoostSources", []))
         retrieval_tags = list(base.get("retrievalBoostTags", []))
         evaluator_focus = list(base.get("evaluatorFocus", []))
+        prompt_sections = list(base.get("promptSections", []))
 
         if student_analysis.get("mockingOrDismissive"):
             constraints.append("本輪有嘲笑或輕視，服務對象不可突然合作或深層透露。")
@@ -610,6 +813,9 @@ class SimulationStrategyService(ManagedAgent):
         return {
             "simulationMethod": normalized,
             "label": base["label"],
+            "description": base.get("description", ""),
+            "promptSections": unique_strings(prompt_sections)[:10],
+            "policyWeights": base.get("policyWeights", {}),
             "promptFocus": unique_strings(prompt_focus)[:8],
             "responseConstraints": unique_strings(constraints)[:8],
             "retrievalBoostSources": unique_strings(retrieval_sources)[:6],
@@ -1066,7 +1272,7 @@ class EvidenceRetrievalAgent(ManagedAgent):
         return [self._card_from_postgres_row(row) for row in rows]
 
     def _card_from_sqlite_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        card = {
             "id": row["id"],
             "source": row["source"],
             "clientGroup": row["client_group"],
@@ -1082,6 +1288,9 @@ class EvidenceRetrievalAgent(ManagedAgent):
             "licenseNote": row["license_note"],
             "provenanceNote": row["provenance_note"],
         }
+        if "review_flags" in row.keys():
+            card["reviewFlags"] = json.loads(row["review_flags"] or "[]")
+        return card
 
     def _card_from_postgres_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -1100,6 +1309,112 @@ class EvidenceRetrievalAgent(ManagedAgent):
             "licenseNote": row["license_note"],
             "provenanceNote": row["provenance_note"],
         }
+
+    def list_cards(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        filters = filters or {}
+        limit = min(200, max(1, positive_int(filters.get("limit"), 50)))
+        offset = max(0, positive_int(filters.get("offset"), 0))
+        if self._backend == "sqlite":
+            return self._list_sqlite_cards(filters, limit, offset)
+
+        cards = self._filter_memory_cards(self.cards, filters)
+        return {
+            "cards": cards[offset:offset + limit],
+            "total": len(cards),
+            "limit": limit,
+            "offset": offset,
+            "backend": self._backend,
+        }
+
+    def _list_sqlite_cards(self, filters: dict[str, Any], limit: int, offset: int) -> dict[str, Any]:
+        clauses = ["source != 'reddit_mental_health_private'"]
+        params: list[Any] = []
+        source = str(filters.get("source") or "").strip()
+        quality = str(filters.get("quality") or "").strip()
+        client_group = str(filters.get("clientGroup") or "").strip()
+        affect = str(filters.get("affect") or "").strip()
+        search = str(filters.get("search") or "").strip()
+        tag = str(filters.get("tag") or "").strip()
+
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if quality:
+            clauses.append("quality = ?")
+            params.append(quality)
+        if client_group:
+            clauses.append("client_group = ?")
+            params.append(client_group)
+        if affect:
+            clauses.append("affect = ?")
+            params.append(affect)
+        if tag:
+            clauses.append("(issue_tags LIKE ? OR risk_signals LIKE ?)")
+            params.extend([f"%{tag}%", f"%{tag}%"])
+        if search:
+            like = f"%{search}%"
+            clauses.append("(client_utterance LIKE ? OR worker_move LIKE ? OR issue_tags LIKE ? OR risk_signals LIKE ? OR source LIKE ?)")
+            params.extend([like, like, like, like, like])
+
+        where = " AND ".join(clauses)
+        with sqlite3.connect(self.sqlite_path) as db:
+            db.row_factory = sqlite3.Row
+            total = int(db.execute(f"SELECT COUNT(*) FROM evidence_cards WHERE {where}", params).fetchone()[0])
+            rows = db.execute(
+                f"""
+                SELECT id, source, client_group, issue_tags, client_utterance, worker_move,
+                       affect, risk_signals, resistance_type, change_talk, disclosure_depth,
+                       quality, license_note, provenance_note, review_flags
+                FROM evidence_cards
+                WHERE {where}
+                ORDER BY source, id
+                LIMIT ? OFFSET ?
+                """,
+                [*params, limit, offset],
+            ).fetchall()
+
+        return {
+            "cards": [self._card_from_sqlite_row(row) for row in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "backend": "sqlite",
+        }
+
+    def _filter_memory_cards(self, cards: list[dict[str, Any]], filters: dict[str, Any]) -> list[dict[str, Any]]:
+        source = str(filters.get("source") or "").strip()
+        quality = str(filters.get("quality") or "").strip()
+        client_group = str(filters.get("clientGroup") or "").strip()
+        affect = str(filters.get("affect") or "").strip()
+        search = str(filters.get("search") or "").strip().lower()
+        tag = str(filters.get("tag") or "").strip().lower()
+        filtered = []
+        for card in cards:
+            if card.get("source") == "reddit_mental_health_private":
+                continue
+            if source and card.get("source") != source:
+                continue
+            if quality and card.get("quality") != quality:
+                continue
+            if client_group and card.get("clientGroup") != client_group:
+                continue
+            if affect and card.get("affect") != affect:
+                continue
+            searchable = " ".join(
+                [
+                    str(card.get("source", "")),
+                    str(card.get("clientUtterance", "")),
+                    str(card.get("workerMove", "")),
+                    " ".join(card.get("issueTags") or []),
+                    " ".join(card.get("riskSignals") or []),
+                ]
+            ).lower()
+            if search and search not in searchable:
+                continue
+            if tag and tag not in searchable:
+                continue
+            filtered.append(card)
+        return filtered
 
     def run(
         self,
@@ -1818,9 +2133,10 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             False,
         )
         self.root_dir = root_dir
+        self.prompt_registry = PromptRegistry(root_dir)
         self.llm = DeepSeekClient()
         self.sessions = AgentSessionStore(root_dir)
-        self.strategy_service = SimulationStrategyService()
+        self.strategy_service = SimulationStrategyService(self.prompt_registry)
         self.student_analyzer = StudentMoveAnalyzerAgent()
         self.adaptive_policy = AdaptiveResponsePolicy()
         self.evidence_retriever = EvidenceRetrievalAgent(root_dir)
@@ -1893,7 +2209,14 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "embeddingModel": embedding_stats["model"],
             "embeddingCoverage": embedding_stats["coverage"],
             "embeddingStatus": embedding_stats["status"],
+            "promptRegistry": {
+                "clientPrompt": bool(self.prompt_registry.client_prompt()),
+                "simulationMethods": sorted(self.strategy_service.methods.keys()),
+            },
         }
+
+    def list_evidence_cards(self, filters: dict[str, Any]) -> dict[str, Any]:
+        return self.evidence_retriever.list_cards(filters)
 
     def start_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         case_profile = payload.get("caseProfile")
@@ -1903,6 +2226,18 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
 
     def reset_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.sessions.reset_session(payload.get("sessionId"), payload.get("caseProfile"))
+
+    def export_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session_id = payload.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("sessionId is required.")
+        record = self.sessions.session_record(session_id)
+        trace = build_post_session_trace(record.get("events", []), [])
+        return {
+            **record,
+            "trace": trace,
+            "traceSummary": summarize_post_session_trace(trace),
+        }
 
     async def interview_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
         case_profile = payload.get("caseProfile")
@@ -1926,6 +2261,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         )
         adaptive_policy = self.adaptive_policy.run(case_profile, student_analysis, session_continuity)
         adaptive_policy = self.strategy_service.apply_to_policy(adaptive_policy, simulation_strategy)
+        grounding_profile = load_active_grounding_profile(self.root_dir, case_profile)
+        pie_context = summarize_pie_context(grounding_profile, case_profile)
         retrieval_options = payload.get("retrievalOptions") if isinstance(payload.get("retrievalOptions"), dict) else {}
         cards = self.evidence_retriever.run(
             case_profile,
@@ -1944,6 +2281,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "studentAnalysis": student_analysis,
             "sessionContinuity": session_continuity,
             "adaptivePolicy": adaptive_policy,
+            "groundingProfile": compact_profile_for_prompt(grounding_profile),
+            "pieContext": pie_context,
             "retrievedCards": cards,
             "evidenceSummary": evidence_summary,
         }
@@ -1964,6 +2303,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         response["simulationStrategySnapshot"] = simulation_strategy
         response["sessionContinuitySnapshot"] = session_continuity
         response["contextConsistencyAssessment"] = assess_context_consistency(enriched, response)
+        response["profileGroundingSnapshot"] = summarize_grounding_profile(grounding_profile)
+        response["pieContextSnapshot"] = pie_context
         response = self.avatar_director.run(response, case_profile, student_analysis)
         if response.get("evidenceSummary"):
             response["evidenceSummary"]["riskSignals"] = normalize_risk_signals(
@@ -1977,6 +2318,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         response["adaptivePolicySnapshot"] = adaptive_policy
         response["sessionContinuitySnapshot"] = updated_continuity
         response["contextConsistencyAssessment"] = assess_context_consistency(enriched, response)
+        response["profileGroundingSnapshot"] = summarize_grounding_profile(grounding_profile)
+        response["pieContextSnapshot"] = pie_context
         self.sessions.append_event(
             session_id,
             agent_trace_id,
@@ -1987,6 +2330,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
                 "adaptivePolicy": adaptive_policy,
                 "simulationStrategy": simulation_strategy,
                 "sessionContinuity": updated_continuity,
+                "groundingProfileSnapshot": summarize_grounding_profile(grounding_profile),
+                "pieContextSnapshot": pie_context,
                 "evidenceSummary": evidence_summary,
                 "clientResponse": response,
                 "studentText": student_text,
@@ -2024,14 +2369,20 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         if not events and not history:
             raise ValueError("No session trace is available for final-review.")
         trace = build_post_session_trace(events, history)
+        hk_pcf_seed = build_hk_pcf_assessment(case_profile, trace)
+        grounding_profile = load_active_grounding_profile(self.root_dir, case_profile)
         report = await self.post_session_supervisor.run(
             {
                 "sessionId": session_id,
                 "caseProfile": case_profile,
                 "history": history,
                 "trace": trace,
+                "hkPcfAssessmentSeed": hk_pcf_seed,
+                "groundingProfileSnapshot": summarize_grounding_profile(grounding_profile),
+                "pieContextSnapshot": summarize_pie_context(grounding_profile, case_profile),
             }
         )
+        report["hkPcfAssessment"] = merge_hk_pcf_assessment(report.get("hkPcfAssessment"), hk_pcf_seed)
         self.sessions.append_event(
             session_id,
             f"trace-{uuid.uuid4().hex[:16]}",
@@ -2218,6 +2569,33 @@ def next_response_tone(
 
 def build_client_prompt(payload: dict[str, Any]) -> str:
     case_profile = payload["caseProfile"]
+    client_registry = DEFAULT_PROMPT_REGISTRY.client_prompt()
+    base_rules = client_registry.get("baseRules") if isinstance(client_registry.get("baseRules"), list) else []
+    json_shape = client_registry.get("jsonShape") if isinstance(client_registry.get("jsonShape"), dict) else {
+        "clientText": "1-4 natural spoken Hong Kong Cantonese sentences",
+        "affect": "neutral|defensive|ashamed|anxious|reflective|withdrawn|irritated|sad",
+        "resistanceLevel": "none|mild|moderate|high",
+        "riskSignals": ["short risk labels"],
+        "revealedFacts": ["hidden fact id or label"],
+        "changeTalk": ["short change talk labels"],
+        "stateDelta": {
+            "distressLevel": 0,
+            "stressLevel": 0,
+            "selfEsteem": 0,
+            "socialConnection": 0,
+            "academicPressure": 0,
+            "clientOpenness": 0,
+        },
+        "motionCue": "neutral|look_down|avoid_eye_contact|rub_hands|lean_back|slow_nod",
+    }
+    client_rules_text = PromptRegistry.render_lines(base_rules) or PromptRegistry.render_lines([
+        "Do not diagnose, prescribe treatment, or speak as the social worker.",
+        "Stay in character as the service user described below.",
+        "clientText must be natural spoken Hong Kong Cantonese in Traditional Chinese.",
+        "Use evidence cards only as style and behavior patterns. Do not copy their wording.",
+        "Follow the socialWorkContextModel, groundingProfile, pieContext, adaptivePolicy, simulationStrategy, and sessionContinuity.",
+    ])
+    json_shape_text = json.dumps(json_shape, ensure_ascii=False, indent=2)
     history = payload.get("history", [])
     recent_events = sorted(case_profile.get("eventTimeline", []), key=lambda event: event.get("day", 0), reverse=True)[:7]
     visible_facts = [fact for fact in case_profile.get("hiddenFacts", []) if fact.get("disclosed")]
@@ -2244,41 +2622,9 @@ def build_client_prompt(payload: dict[str, Any]) -> str:
 Generate the client response for a social-work interview training app.
 
 Rules:
-- Do not diagnose, prescribe treatment, or speak as the social worker.
-- Stay in character as the service user described below.
-- clientText must be natural spoken Hong Kong Cantonese in Traditional Chinese.
-- Do not answer clientText in English, Simplified Chinese, or Mandarin-style phrasing.
-- Keep labels and enum values in the required JSON schema unchanged.
-- Use evidence cards only as style and behavior patterns. Do not copy their wording.
-- Reveal at most one hidden fact unless the student used strong empathy plus gentle risk exploration.
-- Fit the current simulator stage, disclosureDepth, and clientOpenness.
-- If the student is judgmental, leading, or premature with advice, increase resistance.
-- Follow the socialWorkContextModel: self narrative, core beliefs, shame triggers, avoidance patterns, help-seeking beliefs, stress response style, and disclosure rules.
-- Follow adaptivePolicy. It defines the maximum realistic openness/disclosure and the expected resistance/affect range for this turn.
-- Follow simulationStrategy. It defines the selected simulation method focus; do not ignore its responseConstraints.
-- Continue sessionContinuity. If there was a rupture, repair, or recent disclosure, the client must remember it and respond consistently.
-- If the student only gives a minimal acknowledgement such as "好吧", "啊", or "嗯", do not repeat the previous clientText. Show uncertainty, guardedness, or a sense of being brushed off.
-- Do not reuse the same opening sentence from recent client turns; continue the interaction as the same person.
-- For training simulation, the client may gradually express passive self-harm thoughts, withdrawal fear, relapse triggers, shame, trauma avoidance, or family conflict.
-- Do not invent operational harm details, encouragement, diagnosis, prescriptions, or detailed self-harm/substance-use instructions.
+{client_rules_text}
 - Return exactly this JSON shape:
-{{
-  "clientText": "1-4 natural spoken Hong Kong Cantonese sentences",
-  "affect": "neutral|defensive|ashamed|anxious|reflective|withdrawn|irritated|sad",
-  "resistanceLevel": "none|mild|moderate|high",
-  "riskSignals": ["short risk labels"],
-  "revealedFacts": ["hidden fact id or label"],
-  "changeTalk": ["short change talk labels"],
-  "stateDelta": {{
-    "distressLevel": 0,
-    "stressLevel": 0,
-    "selfEsteem": 0,
-    "socialConnection": 0,
-    "academicPressure": 0,
-    "clientOpenness": 0
-  }},
-  "motionCue": "neutral|look_down|avoid_eye_contact|rub_hands|lean_back|slow_nod"
-}}
+{json_shape_text}
 
 Case:
 {json.dumps({
@@ -2317,6 +2663,12 @@ Simulation strategy:
 
 Session continuity:
 {json.dumps(payload.get("sessionContinuity"), ensure_ascii=False)}
+
+Self-report grounding profile:
+{json.dumps(payload.get("groundingProfile"), ensure_ascii=False)}
+
+Person-in-Environment / Micro-Meso-Macro context:
+{json.dumps(payload.get("pieContext"), ensure_ascii=False)}
 
 Retrieved evidence cards:
 {json.dumps(evidence_for_prompt, ensure_ascii=False)}
@@ -2606,21 +2958,23 @@ def round_score(value: float) -> float:
 
 def build_realism_repair_prompt(payload: dict[str, Any], response: dict[str, Any], assessment: dict[str, Any]) -> str:
     case_profile = payload.get("caseProfile", {})
+    repair_registry = DEFAULT_PROMPT_REGISTRY.realism_repair()
+    repair_goals = repair_registry.get("repairGoals") if isinstance(repair_registry.get("repairGoals"), list) else []
+    repair_goals_text = PromptRegistry.render_lines(repair_goals) or PromptRegistry.render_lines([
+        "Keep clientText in natural spoken Hong Kong Cantonese.",
+        "Do not sound like a therapist, supervisor, narrator, or textbook.",
+        "Reduce over-disclosure when rapport/clientOpenness is low.",
+        "Match the student's move and continue session continuity.",
+        "Do not copy evidence card wording.",
+        "Do not include operational self-harm, violence, medication, substance-use, or diagnosis details.",
+    ])
     return f"""
 Repair the service-user response so it feels like a realistic social-work interview participant.
 
 Return only valid JSON in the same ClientResponse shape. Do not add realismAssessment.
 
 Repair goals:
-- Keep clientText in natural spoken Hong Kong Cantonese.
-- Do not sound like a therapist, supervisor, narrator, or textbook.
-- Reduce over-disclosure when rapport/clientOpenness is low.
-- Keep at most one hidden fact unless the student used empathy plus gentle risk exploration.
-- Match the student's move: mocking or judgment should create guarded or irritated resistance; apology should only repair trust slightly.
-- If the original clientText repeats a recent client turn, generate a new continuation instead of reusing the same opening or same sentence.
-- If the student only said "好吧", "啊", "嗯", or another minimal acknowledgement, respond to the low engagement naturally instead of repeating prior context.
-- Do not copy evidence card wording.
-- Do not include operational self-harm, violence, medication, substance-use, or diagnosis details.
+{repair_goals_text}
 
 Current case:
 {json.dumps({
@@ -2640,6 +2994,12 @@ Adaptive policy:
 
 Session continuity:
 {json.dumps(payload.get("sessionContinuity"), ensure_ascii=False)}
+
+Self-report grounding profile:
+{json.dumps(payload.get("groundingProfile"), ensure_ascii=False)}
+
+Person-in-Environment / Micro-Meso-Macro context:
+{json.dumps(payload.get("pieContext"), ensure_ascii=False)}
 
 Student text:
 {payload.get("studentText")}
@@ -2706,6 +3066,22 @@ Recent interview:
 
 def build_post_session_supervisor_prompt(payload: dict[str, Any]) -> str:
     case_profile = payload["caseProfile"]
+    supervisor_registry = DEFAULT_PROMPT_REGISTRY.post_session_supervisor()
+    report_rules = supervisor_registry.get("reportRules") if isinstance(supervisor_registry.get("reportRules"), list) else []
+    frameworks = supervisor_registry.get("frameworks") if isinstance(supervisor_registry.get("frameworks"), list) else []
+    report_rules_text = PromptRegistry.render_lines(report_rules) or PromptRegistry.render_lines([
+        "Use professional Hong Kong Traditional Chinese for all report strings.",
+        "Use 0-10 scores. Evaluate the full session, not only the latest turn.",
+        "Do not reveal undisclosed hidden facts as if the student already knew them.",
+    ])
+    frameworks_text = PromptRegistry.render_lines(frameworks, prefix="") or "\n".join([
+        "1. Competency-Based Social Work Education: engagement, assessment, ethics, intervention planning.",
+        "2. Process Recording / Reflective Supervision: turning points and trainee-client interaction process.",
+        "3. OSCE / Simulated Client Assessment: case-specific learning objectives.",
+        "4. MITI / Motivational Interviewing: open questions, reflections, change talk, non-judgment for alcohol/substance cases.",
+        "5. Trauma-Informed Practice: safety, choice, collaboration, pace, avoiding retraumatization.",
+        "6. Person-in-Environment / Micro-Meso-Macro: link person, relationships, institutions, and structural context.",
+    ])
     trace = payload.get("trace", {})
     transcript = "\n".join(
         f"{item.get('turnId')}: 學生社工：{item.get('studentText', '')}\n"
@@ -2747,17 +3123,38 @@ Return exactly this JSON shape:
     "learningObjectivesMet": ["objectives met"],
     "learningObjectivesNotMet": ["objectives not met"]
   }},
-  "suggestedPracticeGoals": ["next practice goals"]
+  "suggestedPracticeGoals": ["next practice goals"],
+  "hkPcfAssessment": {{
+    "frameworkLabel": "{HK_PCF_FRAMEWORK_LABEL}",
+    "frameworkBasis": ["basis statements"],
+    "scores": {{
+      "engagementAndRelationship": 0,
+      "assessmentAndInformationGathering": 0,
+      "personInEnvironmentAndHongKongContext": 0,
+      "ethicsConfidentialityAndBoundaries": 0,
+      "selfDeterminationAndInformedChoice": 0,
+      "diversityAntiDiscriminationAndCulturalSensitivity": 0,
+      "riskSafetyAndSafeguarding": 0,
+      "interventionPlanningAndReferral": 0,
+      "professionalReflectionAndUseOfSupervision": 0
+    }},
+    "evidence": {{
+      "strengths": ["trace-grounded strengths"],
+      "concerns": ["trace-grounded concerns"],
+      "turningPoints": ["trace-grounded turning points"],
+      "missedOpportunities": ["trace-grounded missed opportunities"]
+    }},
+    "practiceRecommendations": ["specific practice recommendations"],
+    "disclaimer": "{HK_PCF_DISCLAIMER}"
+  }}
 }}
 
-Use professional Hong Kong Traditional Chinese for all report strings.
-Use 0-10 scores. Evaluate the full session, not only the latest turn.
+{report_rules_text}
+For hkPcfAssessment, use the deterministic seed below as the scoring anchor. You may rewrite
+evidence and recommendations in professional Hong Kong Traditional Chinese, but do not invent
+facts or change the competency meaning.
 Base the report on these frameworks:
-1. Competency-Based Social Work Education: engagement, assessment, ethics, intervention planning.
-2. Process Recording / Reflective Supervision: turning points and trainee-client interaction process.
-3. OSCE / Simulated Client Assessment: case-specific learning objectives.
-4. MITI / Motivational Interviewing: open questions, reflections, change talk, non-judgment for alcohol/substance cases.
-5. Trauma-Informed Practice: safety, choice, collaboration, pace, avoiding retraumatization.
+{frameworks_text}
 
 Do not reveal undisclosed hidden facts as if the student already knew them. If mentioning missed areas,
 phrase them as exploration directions, not spoilers. Do not provide operational self-harm, violence,
@@ -2774,6 +3171,15 @@ Case:
 
 Session trace summary:
 {json.dumps(summarize_post_session_trace(trace), ensure_ascii=False)}
+
+HK SWRB-aligned PCF seed:
+{json.dumps(payload.get("hkPcfAssessmentSeed"), ensure_ascii=False)}
+
+Grounding profile summary:
+{json.dumps(payload.get("groundingProfileSnapshot"), ensure_ascii=False)}
+
+Person-in-Environment / Micro-Meso-Macro context:
+{json.dumps(payload.get("pieContextSnapshot"), ensure_ascii=False)}
 
 Transcript:
 {transcript}
@@ -2802,6 +3208,8 @@ def build_post_session_trace(events: list[dict[str, Any]], history: list[dict[st
                 "affect": response.get("affect"),
                 "realismAssessment": response.get("realismAssessment", {}),
                 "evidenceSummary": payload.get("evidenceSummary", {}),
+                "groundingProfileSnapshot": payload.get("groundingProfileSnapshot", {}),
+                "pieContextSnapshot": payload.get("pieContextSnapshot", {}),
                 "avatarDirective": response.get("avatarDirective", {}),
                 "createdAt": event.get("createdAt"),
                 "eventIndex": index,
@@ -2864,6 +3272,175 @@ def summarize_post_session_trace(trace: dict[str, Any]) -> dict[str, Any]:
         "resistanceTrend": resistance,
         "trustTrajectoryTail": openness[-8:],
     }
+
+
+def build_hk_pcf_assessment(case_profile: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
+    turns = trace.get("turns") if isinstance(trace.get("turns"), list) else []
+    summary = summarize_post_session_trace(trace)
+    move_counts = summary["studentMoveCounts"]
+    turn_count = max(1, summary["turnCount"])
+    risk_signals = summary["riskSignals"]
+    revealed_facts = summary["revealedFacts"]
+    resistance_trend = summary["resistanceTrend"]
+    text_blob = " ".join(str(turn.get("studentText", "")) for turn in turns)
+
+    open_ratio = move_counts["openQuestion"] / turn_count
+    reflective_ratio = move_counts["reflectiveListening"] / turn_count
+    judgment_ratio = (move_counts["judgmentalOrDirective"] + move_counts["mockingOrDismissive"]) / turn_count
+    premature_ratio = move_counts["prematureAdvice"] / turn_count
+    risk_ratio = move_counts["riskExploration"] / turn_count
+    apology_ratio = move_counts["apologyRepair"] / turn_count
+    high_resistance = sum(1 for item in resistance_trend if item == "high")
+    moderate_or_high_resistance = sum(1 for item in resistance_trend if item in {"moderate", "high"})
+    context_mentions = count_matches(text_blob, r"家人|爸爸|媽媽|父母|老師|同學|朋友|學校|工作|社區|屋企|家庭|資源|服務|轉介|支援")
+    micro_mentions = count_matches(text_blob, r"家人|爸爸|媽媽|父母|朋友|同學|伴侶|屋企|家庭")
+    meso_mentions = count_matches(text_blob, r"老師|學校|工作|公司|社工|醫生|服務|轉介|資源|支援")
+    macro_mentions = count_matches(text_blob, r"社區|制度|政策|住屋|經濟|歧視|污名|文化|身份|權力|香港")
+    ethics_mentions = count_matches(text_blob, r"保密|私隱|私隐|資料|權利|界線|角色|同意|知情|安全")
+    choice_mentions = count_matches(text_blob, r"你想|你願意|你可以選|可以唔講|慢慢|按你步伐|選擇|決定|自主|自決")
+    diversity_mentions = count_matches(text_blob, r"唔係你錯|污名|標籤|歧視|文化|身份|壓力|權力|被看低|羞恥")
+    planning_mentions = count_matches(text_blob, r"下一步|計劃|安全|轉介|資源|支援|跟進|今日|之後|可以搵|一齊諗")
+    strengths_mentions = count_matches(text_blob, r"做到|支持|資源|曾經|幫到|優點|力量|撐住|保護|朋友")
+    risk_needs_follow_up = bool(risk_signals)
+    risk_followed_up = bool(move_counts["riskExploration"]) or planning_mentions > 0
+
+    scores = {
+        "engagementAndRelationship": clamp_score(4.8 + open_ratio * 2.0 + reflective_ratio * 2.2 + apology_ratio * 1.0 - judgment_ratio * 3.2 - high_resistance * 0.3),
+        "assessmentAndInformationGathering": clamp_score(4.2 + open_ratio * 1.4 + min(2.0, len(revealed_facts) * 0.35) + min(1.6, context_mentions * 0.25) + risk_ratio * 1.2 - premature_ratio * 1.6),
+        "personInEnvironmentAndHongKongContext": clamp_score(3.8 + min(3.2, context_mentions * 0.45) + min(1.2, len(revealed_facts) * 0.2) - max(0.0, premature_ratio - 0.2) * 1.5),
+        "ethicsConfidentialityAndBoundaries": clamp_score(5.4 + min(1.4, ethics_mentions * 0.35) + choice_mentions * 0.12 - move_counts["mockingOrDismissive"] * 2.0 - move_counts["judgmentalOrDirective"] * 0.7),
+        "selfDeterminationAndInformedChoice": clamp_score(4.6 + min(2.2, choice_mentions * 0.45) + open_ratio * 1.0 + reflective_ratio * 0.8 - premature_ratio * 2.2 - judgment_ratio * 1.6),
+        "diversityAntiDiscriminationAndCulturalSensitivity": clamp_score(4.8 + min(1.8, diversity_mentions * 0.4) + reflective_ratio * 1.0 - judgment_ratio * 1.5),
+        "riskSafetyAndSafeguarding": clamp_score((4.0 if risk_needs_follow_up else 5.2) + (2.4 if risk_followed_up else 0.0) + risk_ratio * 1.8 + planning_mentions * 0.15 - (2.4 if risk_needs_follow_up and not risk_followed_up else 0.0)),
+        "interventionPlanningAndReferral": clamp_score(3.8 + min(2.4, planning_mentions * 0.38) + min(1.2, strengths_mentions * 0.25) + (0.8 if risk_needs_follow_up and risk_followed_up else 0.0) - premature_ratio * 1.2),
+        "professionalReflectionAndUseOfSupervision": clamp_score(4.4 + apology_ratio * 1.8 + reflective_ratio * 1.0 - judgment_ratio * 1.4 + (0.5 if moderate_or_high_resistance and apology_ratio else 0.0)),
+    }
+
+    strengths: list[str] = []
+    concerns: list[str] = []
+    missed: list[str] = []
+    turning_points: list[str] = []
+
+    if move_counts["openQuestion"]:
+        strengths.append(f"使用了 {move_counts['openQuestion']} 次開放式問題，有助逐步收集資料。")
+    if move_counts["reflectiveListening"]:
+        strengths.append(f"使用了 {move_counts['reflectiveListening']} 次反映式聆聽，有助建立關係和調頻。")
+    if context_mentions:
+        strengths.append("有探索家庭、學校、朋輩、社區或服務資源等人在情境因素。")
+    if planning_mentions:
+        strengths.append("有開始觸及下一步、支援、轉介或安全安排。")
+    if not strengths:
+        strengths.append("能完成基本對話輪次，但仍需要更明確地運用社工訪談技巧。")
+
+    if move_counts["mockingOrDismissive"]:
+        concerns.append("曾出現嘲笑或淡化語氣，影響專業關係、倫理與服務對象安全感。")
+    if move_counts["judgmentalOrDirective"]:
+        concerns.append("曾出現評判或指令式語句，可能降低自決、信任及透露意願。")
+    if move_counts["prematureAdvice"]:
+        concerns.append("曾較早給建議，未必有足夠評估基礎。")
+    if risk_needs_follow_up and not risk_followed_up:
+        concerns.append("服務對象出現風險線索後，未見足夠即時安全探索或支持盤點。")
+    if not context_mentions:
+        concerns.append("人在情境資料仍不足，未充分探索家庭、學校、社區或服務系統。")
+
+    for turn in turns:
+        turn_id = str(turn.get("turnId", "turn"))
+        analysis = turn.get("studentAnalysis") if isinstance(turn.get("studentAnalysis"), dict) else {}
+        if analysis.get("mockingOrDismissive") or analysis.get("judgmentalOrDirective"):
+            turning_points.append(f"{turn_id}：學生語氣被標記為評判/嘲笑，服務對象信任和投入可能下降。")
+        if turn.get("riskSignals"):
+            turning_points.append(f"{turn_id}：服務對象出現安全或風險線索，適合溫和作安全探索。")
+        if turn.get("revealedFacts"):
+            turning_points.append(f"{turn_id}：服務對象透露新資料，適合用反映和開放式問題鞏固脈絡。")
+        if len(turning_points) >= 4:
+            break
+    if not turning_points:
+        turning_points.append("整段訪談未見明顯轉折，下一次可用更具體的開放式問題推進評估。")
+
+    if not move_counts["riskExploration"] and risk_needs_follow_up:
+        missed.append("可在風險線索出現後，以穩定語氣確認即時安全、支持人物和今天的保護安排。")
+    if not context_mentions:
+        missed.append("可溫和跟進家庭、學校、朋輩或社區資源，以建立人在情境評估。")
+    if not choice_mentions:
+        missed.append("可更清楚給服務對象選擇和步伐控制，例如先問對方願意由哪部分開始。")
+    if not missed:
+        missed.append("下一步可把已探索資料整理成共同理解，再協商可行的支援或轉介。")
+
+    recommendations = [
+        "下一次練習可先用一個反映句承接情緒，再用開放式問題探索具體情境。",
+        "遇到風險語言時，保持語氣穩定，先確認即時安全和可用支持，再談下一步。",
+        "把建議放在評估和同意之後，避免過早替服務對象決定方向。",
+    ]
+    if case_profile.get("caseType") in SUBSTANCE_CASE_TYPES:
+        recommendations.append("酗酒或藥物相關個案可多用動機式訪談語言，探索矛盾和 change talk。")
+
+    return {
+        "frameworkLabel": HK_PCF_FRAMEWORK_LABEL,
+        "frameworkBasis": HK_PCF_FRAMEWORK_BASIS,
+        "scores": scores,
+        "evidence": {
+            "strengths": unique_strings(strengths)[:5],
+            "concerns": unique_strings(concerns)[:5],
+            "turningPoints": unique_strings(turning_points)[:5],
+            "missedOpportunities": unique_strings(missed)[:5],
+        },
+        "personInEnvironmentAssessment": {
+            "summary": (
+                "已開始把服務對象放回家庭、學校/工作、服務和社區脈絡理解。"
+                if context_mentions
+                else "訪談仍偏向個人問題描述，人在情境探索不足。"
+            ),
+            "microEvidenceCount": micro_mentions,
+            "mesoEvidenceCount": meso_mentions,
+            "macroEvidenceCount": macro_mentions,
+        },
+        "microMesoMacroCoverage": {
+            "micro": {
+                "score": clamp_score(3.5 + min(4.0, micro_mentions * 0.8)),
+                "evidenceSignals": ["family_peer_context"] if micro_mentions else [],
+            },
+            "meso": {
+                "score": clamp_score(3.5 + min(4.0, meso_mentions * 0.7)),
+                "evidenceSignals": ["school_work_service_context"] if meso_mentions else [],
+            },
+            "macro": {
+                "score": clamp_score(3.0 + min(4.0, macro_mentions * 0.9)),
+                "evidenceSignals": ["community_structural_context"] if macro_mentions else [],
+            },
+        },
+        "practiceRecommendations": unique_strings(recommendations)[:5],
+        "disclaimer": HK_PCF_DISCLAIMER,
+    }
+
+
+def count_matches(text: str, pattern: str) -> int:
+    return len(re.findall(pattern, text, re.I))
+
+
+def merge_hk_pcf_assessment(candidate: Any, seed: dict[str, Any]) -> dict[str, Any]:
+    merged = seed.copy()
+    if isinstance(candidate, dict):
+        evidence = candidate.get("evidence") if isinstance(candidate.get("evidence"), dict) else {}
+        merged["evidence"] = {
+            "strengths": candidate_list_or_seed(evidence.get("strengths"), seed["evidence"]["strengths"]),
+            "concerns": candidate_list_or_seed(evidence.get("concerns"), seed["evidence"]["concerns"]),
+            "turningPoints": candidate_list_or_seed(evidence.get("turningPoints"), seed["evidence"]["turningPoints"]),
+            "missedOpportunities": candidate_list_or_seed(evidence.get("missedOpportunities"), seed["evidence"]["missedOpportunities"]),
+        }
+        merged["practiceRecommendations"] = candidate_list_or_seed(
+            candidate.get("practiceRecommendations"),
+            seed["practiceRecommendations"],
+        )
+    merged["frameworkLabel"] = HK_PCF_FRAMEWORK_LABEL
+    merged["frameworkBasis"] = HK_PCF_FRAMEWORK_BASIS
+    merged["scores"] = seed["scores"]
+    merged["disclaimer"] = HK_PCF_DISCLAIMER
+    return merged
+
+
+def candidate_list_or_seed(candidate: Any, seed: list[str]) -> list[str]:
+    values = unique_strings(candidate if isinstance(candidate, list) else [])
+    return values[:6] if values else seed
 
 
 def safety_hint_for_response(response: dict[str, Any]) -> str | None:
@@ -3625,6 +4202,13 @@ def last_student(history: list[dict[str, Any]]) -> str:
     return next((turn.get("text", "") for turn in reversed(history) if turn.get("speaker") == "student"), "")
 
 
+def positive_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def is_client_response(value: Any) -> bool:
     return (
         isinstance(value, dict)
@@ -3669,7 +4253,7 @@ def is_post_session_supervisor_report(value: Any) -> bool:
         "culturalHumility",
         "nextStepPlanning",
     ]
-    return (
+    base_valid = (
         isinstance(value.get("overallSummary"), str)
         and isinstance(scores, dict)
         and all(isinstance(scores.get(key), (int, float)) for key in required_scores)
@@ -3682,4 +4266,28 @@ def is_post_session_supervisor_report(value: Any) -> bool:
         and isinstance(case_feedback.get("learningObjectivesMet"), list)
         and isinstance(case_feedback.get("learningObjectivesNotMet"), list)
         and isinstance(value.get("suggestedPracticeGoals"), list)
+    )
+    if not base_valid:
+        return False
+    hk_pcf = value.get("hkPcfAssessment")
+    return hk_pcf is None or is_hk_pcf_assessment(hk_pcf)
+
+
+def is_hk_pcf_assessment(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    scores = value.get("scores")
+    evidence = value.get("evidence")
+    return (
+        isinstance(value.get("frameworkLabel"), str)
+        and isinstance(value.get("frameworkBasis"), list)
+        and isinstance(scores, dict)
+        and all(isinstance(scores.get(key), (int, float)) for key in HK_PCF_DOMAINS)
+        and isinstance(evidence, dict)
+        and isinstance(evidence.get("strengths"), list)
+        and isinstance(evidence.get("concerns"), list)
+        and isinstance(evidence.get("turningPoints"), list)
+        and isinstance(evidence.get("missedOpportunities"), list)
+        and isinstance(value.get("practiceRecommendations"), list)
+        and isinstance(value.get("disclaimer"), str)
     )

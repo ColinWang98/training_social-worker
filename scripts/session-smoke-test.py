@@ -161,6 +161,15 @@ async def run_case(coordinator, case_type: str, simulation_method: str | None = 
     final_openness = case_profile.get("psychologicalState", {}).get("clientOpenness", 0)
     if final_openness == start_openness:
         raise RuntimeError(f"{case_type}: openness did not change across the session")
+    final_report = await coordinator.final_review(
+        {
+            "sessionId": session["sessionId"],
+            "caseProfile": copy.deepcopy(case_profile),
+            "history": history,
+        }
+    )
+    validate_final_report(case_type, final_report)
+    hk_scores = final_report.get("hkPcfAssessment", {}).get("scores", {})
 
     return {
         "caseType": case_type,
@@ -169,6 +178,8 @@ async def run_case(coordinator, case_type: str, simulation_method: str | None = 
         "startOpenness": start_openness,
         "finalOpenness": final_openness,
         "disclosedFacts": [fact["id"] for fact in case_profile.get("hiddenFacts", []) if fact.get("disclosed")],
+        "hkPcfEngagement": hk_scores.get("engagementAndRelationship"),
+        "hkPcfRiskSafety": hk_scores.get("riskSafetyAndSafeguarding"),
         "rows": rows,
     }
 
@@ -220,6 +231,30 @@ def validate_turn(case_type: str, index: int, student_text: str, response: dict)
         for item in directive.get("basis", [])
     ):
         raise RuntimeError(f"{case_type} round {index}: risk response missing safety_low_intensity basis")
+
+
+def validate_final_report(case_type: str, report: dict) -> None:
+    hk_pcf = report.get("hkPcfAssessment") or {}
+    scores = hk_pcf.get("scores") or {}
+    required_scores = [
+        "engagementAndRelationship",
+        "assessmentAndInformationGathering",
+        "personInEnvironmentAndHongKongContext",
+        "ethicsConfidentialityAndBoundaries",
+        "selfDeterminationAndInformedChoice",
+        "diversityAntiDiscriminationAndCulturalSensitivity",
+        "riskSafetyAndSafeguarding",
+        "interventionPlanningAndReferral",
+        "professionalReflectionAndUseOfSupervision",
+    ]
+    missing = [key for key in required_scores if not isinstance(scores.get(key), (int, float))]
+    if missing:
+        raise RuntimeError(f"{case_type}: final review missing HK PCF scores {missing}")
+    evidence = hk_pcf.get("evidence") or {}
+    if not isinstance(evidence.get("strengths"), list) or not isinstance(evidence.get("missedOpportunities"), list):
+        raise RuntimeError(f"{case_type}: final review HK PCF evidence lists are required")
+    if "SWRB" not in str(hk_pcf.get("disclaimer", "")):
+        raise RuntimeError(f"{case_type}: final review HK PCF disclaimer must mention SWRB limitation")
 
 
 async def main() -> None:

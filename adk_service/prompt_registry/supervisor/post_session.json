@@ -1,0 +1,22 @@
+{
+  "title": "Post-Session Social Work Supervision Prompt",
+  "reportRules": [
+    "This is a training report, not diagnosis, treatment advice, or crisis intervention.",
+    "Use professional Hong Kong Traditional Chinese for all report strings.",
+    "Use 0-10 scores. Evaluate the full session, not only the latest turn.",
+    "For hkPcfAssessment, use the deterministic seed as the scoring anchor.",
+    "You may rewrite evidence and recommendations in professional Hong Kong Traditional Chinese, but do not invent facts or change the competency meaning.",
+    "Do not reveal undisclosed hidden facts as if the student already knew them.",
+    "If mentioning missed areas, phrase them as exploration directions, not spoilers.",
+    "Do not provide operational self-harm, violence, drug-use, detox, diagnosis, or prescription details.",
+    "Include Person-in-Environment feedback using micro, meso, and macro coverage when available."
+  ],
+  "frameworks": [
+    "Competency-Based Social Work Education: engagement, assessment, ethics, intervention planning.",
+    "Process Recording / Reflective Supervision: turning points and trainee-client interaction process.",
+    "OSCE / Simulated Client Assessment: case-specific learning objectives.",
+    "MITI / Motivational Interviewing: open questions, reflections, change talk, non-judgment for alcohol/substance cases.",
+    "Trauma-Informed Practice: safety, choice, collaboration, pace, avoiding retraumatization.",
+    "Person-in-Environment / Micro-Meso-Macro: individual experience, family/school/work relationships, and Hong Kong service/cultural context."
+  ]
+}

@@ -1,6 +1,7 @@
 import {
   CaseProfile,
   ClientResponse,
+  EvidenceCardListResponse,
   InterviewTurn,
   PostSessionSupervisorReport,
   RetrievalOptions,
@@ -39,6 +40,17 @@ type SessionResponse = {
   sessionId: string;
   caseId?: string;
   reset?: boolean;
+};
+
+export type EvidenceCardListRequest = {
+  search?: string;
+  source?: string;
+  quality?: string;
+  clientGroup?: string;
+  affect?: string;
+  tag?: string;
+  limit?: number;
+  offset?: number;
 };
 
 export type TtsRequest = {
@@ -103,6 +115,24 @@ export async function requestTtsAudio(request: TtsRequest): Promise<TtsResponse>
   return data;
 }
 
+export async function listEvidenceCards(request: EvidenceCardListRequest): Promise<EvidenceCardListResponse> {
+  const params = new URLSearchParams();
+  Object.entries(request).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, String(value));
+    }
+  });
+  const response = await fetch(`/api/evidence-cards?${params.toString()}`);
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.error ?? `Request failed with ${response.status}`);
+  }
+  if (!isEvidenceCardListResponse(data)) {
+    throw new Error('Evidence card list failed schema validation.');
+  }
+  return data;
+}
+
 async function postJson(path: string, body: unknown) {
   const response = await fetch(path, {
     method: 'POST',
@@ -146,7 +176,7 @@ function isSupervisorReview(value: unknown): value is SupervisorReview {
 
 function isPostSessionSupervisorReport(value: unknown): value is PostSessionSupervisorReport {
   const report = value as PostSessionSupervisorReport;
-  return (
+  const baseValid =
     typeof report?.overallSummary === 'string' &&
     typeof report?.competencyScores?.engagement === 'number' &&
     typeof report.competencyScores.assessment === 'number' &&
@@ -158,7 +188,22 @@ function isPostSessionSupervisorReport(value: unknown): value is PostSessionSupe
     Array.isArray(report.caseSpecificFeedback?.frameworkUsed) &&
     Array.isArray(report.caseSpecificFeedback.learningObjectivesMet) &&
     Array.isArray(report.caseSpecificFeedback.learningObjectivesNotMet) &&
-    Array.isArray(report.suggestedPracticeGoals)
+    Array.isArray(report.suggestedPracticeGoals);
+  if (!baseValid) return false;
+  if (!report.hkPcfAssessment) return true;
+  const hkPcf = report.hkPcfAssessment;
+  return (
+    typeof hkPcf.frameworkLabel === 'string' &&
+    Array.isArray(hkPcf.frameworkBasis) &&
+    typeof hkPcf.scores?.engagementAndRelationship === 'number' &&
+    typeof hkPcf.scores.assessmentAndInformationGathering === 'number' &&
+    typeof hkPcf.scores.riskSafetyAndSafeguarding === 'number' &&
+    Array.isArray(hkPcf.evidence?.strengths) &&
+    Array.isArray(hkPcf.evidence.concerns) &&
+    Array.isArray(hkPcf.evidence.turningPoints) &&
+    Array.isArray(hkPcf.evidence.missedOpportunities) &&
+    Array.isArray(hkPcf.practiceRecommendations) &&
+    typeof hkPcf.disclaimer === 'string'
   );
 }
 
@@ -174,5 +219,17 @@ function isTtsResponse(value: unknown): value is TtsResponse {
     typeof response.audioBase64 === 'string' &&
     typeof response.provider === 'string' &&
     typeof response.voice === 'string'
+  );
+}
+
+function isEvidenceCardListResponse(value: unknown): value is EvidenceCardListResponse {
+  const response = value as EvidenceCardListResponse;
+  return (
+    Array.isArray(response?.cards) &&
+    typeof response.total === 'number' &&
+    typeof response.limit === 'number' &&
+    typeof response.offset === 'number' &&
+    typeof response.backend === 'string' &&
+    response.cards.every((card) => typeof card?.id === 'string' && typeof card.clientUtterance === 'string')
   );
 }

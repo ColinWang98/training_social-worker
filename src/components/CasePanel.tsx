@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, CheckCircle2, Eye, EyeOff, FileText, Network, ShieldAlert, Sparkles } from 'lucide-react';
+import { Activity, CheckCircle2, Eye, EyeOff, FileText, Network, ShieldAlert, Sparkles, X } from 'lucide-react';
 import { getKnownFacts, getRecentEvents, getUnrevealedFacts } from '../lib/caseEngine';
 import {
   CaseProfile,
@@ -26,6 +26,8 @@ type CasePanelProps = {
   simulationStrategySnapshot: ClientResponse['simulationStrategySnapshot'] | null;
   sessionContinuitySnapshot: ClientResponse['sessionContinuitySnapshot'] | null;
   contextConsistencyAssessment: ClientResponse['contextConsistencyAssessment'] | null;
+  profileGroundingSnapshot: ClientResponse['profileGroundingSnapshot'] | null;
+  pieContextSnapshot: ClientResponse['pieContextSnapshot'] | null;
   safetyFlags: string[];
   safetyHint: string | null;
   postSessionReport: PostSessionSupervisorReport | null;
@@ -53,6 +55,8 @@ export function CasePanel({
   simulationStrategySnapshot,
   sessionContinuitySnapshot,
   contextConsistencyAssessment,
+  profileGroundingSnapshot,
+  pieContextSnapshot,
   safetyFlags,
   safetyHint,
   postSessionReport,
@@ -71,11 +75,26 @@ export function CasePanel({
   const knownFacts = getKnownFacts(caseProfile);
   const unrevealedFacts = getUnrevealedFacts(caseProfile);
   const [viewMode, setViewMode] = useState<TrainingViewMode>('trainee');
+  const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
   const isInstructor = viewMode === 'instructor';
 
   useEffect(() => {
     setViewMode('trainee');
+    setIsReportDialogOpen(false);
   }, [caseProfile.id]);
+
+  useEffect(() => {
+    setIsReportDialogOpen(Boolean(postSessionReport));
+  }, [postSessionReport]);
+
+  useEffect(() => {
+    if (!isReportDialogOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsReportDialogOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isReportDialogOpen]);
 
   return (
     <aside className="casePanel" aria-label="個案狀態及督導">
@@ -292,16 +311,23 @@ export function CasePanel({
         <button
           className="sessionEndButton"
           type="button"
-          disabled={!canEndSession || isFinalReviewPending}
-          onClick={onEndSession}
+          disabled={(!canEndSession && !postSessionReport) || isFinalReviewPending}
+          onClick={() => {
+            if (postSessionReport) {
+              setIsReportDialogOpen(true);
+              return;
+            }
+            onEndSession();
+          }}
         >
           <CheckCircle2 size={16} />
-          {isFinalReviewPending ? '正在生成督導報告' : postSessionReport ? '督導報告已生成' : '結束訪談並生成報告'}
+          {isFinalReviewPending ? '正在生成督導報告' : postSessionReport ? '查看完整督導報告' : '結束訪談並生成報告'}
         </button>
         {postSessionReport ? (
-          <>
-            <PostSessionReportView report={postSessionReport} detailed={isInstructor} />
-          </>
+          <div className="reportSummaryCard">
+            <strong>督導報告已生成</strong>
+            <p>{postSessionReport.overallSummary}</p>
+          </div>
         ) : (
           <p className="mutedText">完成練習後按「結束訪談」，系統會基於整場 transcript、風險探索、透露節奏和關係變化生成報告。</p>
         )}
@@ -350,6 +376,29 @@ export function CasePanel({
             <TagRow label="羞恥觸發" values={caseProfile.socialWorkContextModel.shameTriggers} />
             <TagRow label="逃避模式" values={caseProfile.socialWorkContextModel.avoidancePatterns} />
             <TagRow label="透露規則" values={caseProfile.socialWorkContextModel.disclosureRules} />
+          </section>
+
+          <section className="sideSection">
+            <div className="sectionTitle">
+              <Network size={16} />
+              <h2>Grounding / PIE</h2>
+            </div>
+            {profileGroundingSnapshot || pieContextSnapshot ? (
+              <>
+                <div className="avatarDirectiveGrid">
+                  <DirectiveItem label="Profile" value={profileGroundingSnapshot?.profileId ?? 'case spec'} />
+                  <DirectiveItem label="生成模式" value={profileGroundingSnapshot?.generationMode ?? 'case_spec'} />
+                  <DirectiveItem label="PIE 來源" value={pieContextSnapshot?.source ?? 'case_spec'} />
+                  <DirectiveItem label="Evidence Cards" value={`${profileGroundingSnapshot?.sourceEvidenceSummary?.cardCount ?? 0}`} />
+                </div>
+                <TagRow label="Reflection keys" values={profileGroundingSnapshot?.reflectionKeys ?? []} />
+                <TagRow label="Micro fields" values={Object.keys(pieContextSnapshot?.microSystem ?? {})} />
+                <TagRow label="Meso fields" values={Object.keys(pieContextSnapshot?.mesoSystem ?? {})} />
+                <TagRow label="Macro fields" values={Object.keys(pieContextSnapshot?.macroSystem ?? {})} />
+              </>
+            ) : (
+              <p className="mutedText">服務對象回應後，這裡會顯示本輪使用的 grounding profile 與 micro/meso/macro 摘要。</p>
+            )}
           </section>
 
           <section className="sideSection">
@@ -516,6 +565,28 @@ export function CasePanel({
           </section>
         </>
       )}
+      {postSessionReport && isReportDialogOpen && (
+        <div className="reportDialogOverlay" role="presentation" onMouseDown={() => setIsReportDialogOpen(false)}>
+          <section
+            aria-labelledby="post-session-report-title"
+            aria-modal="true"
+            className="reportDialog"
+            role="dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="reportDialogHeader">
+              <div>
+                <h2 id="post-session-report-title">完整督導報告</h2>
+                <p>訪談後評估，以香港社工實務能力參考框架整理。</p>
+              </div>
+              <button aria-label="關閉督導報告" className="iconButton" type="button" onClick={() => setIsReportDialogOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <PostSessionReportView report={postSessionReport} detailed={isInstructor} />
+          </section>
+        </div>
+      )}
     </aside>
   );
 }
@@ -550,11 +621,19 @@ function PostSessionReportView({ report, detailed }: { report: PostSessionSuperv
         <h3>總體表現</h3>
         <p>{report.overallSummary}</p>
       </div>
+      {!report.hkPcfAssessment && (
+        <RadarScoreChart
+          labels={competencyLabels}
+          scores={report.competencyScores}
+          title="督導能力雷達圖"
+        />
+      )}
       <div className="scoreGrid">
         {Object.entries(report.competencyScores).map(([label, value]) => (
           <Metric key={label} label={competencyLabels[label] ?? label} value={value} max={10} />
         ))}
       </div>
+      {report.hkPcfAssessment && <HkPcfAssessmentView assessment={report.hkPcfAssessment} detailed={detailed} />}
       <TurningPointList items={report.processReview.turningPoints} detailed={detailed} />
       <FeedbackList title="有效做法" items={report.processReview.effectiveMoments} />
       <FeedbackList title="錯過機會" items={report.processReview.missedOpportunities} />
@@ -562,6 +641,57 @@ function PostSessionReportView({ report, detailed }: { report: PostSessionSuperv
       <FeedbackList title="已達成學習目標" items={report.caseSpecificFeedback.learningObjectivesMet} />
       <FeedbackList title="仍需練習目標" items={report.caseSpecificFeedback.learningObjectivesNotMet} />
       <FeedbackList title="下一次練習建議" items={report.suggestedPracticeGoals} />
+    </div>
+  );
+}
+
+function HkPcfAssessmentView({
+  assessment,
+  detailed,
+}: {
+  assessment: NonNullable<PostSessionSupervisorReport['hkPcfAssessment']>;
+  detailed: boolean;
+}) {
+  return (
+    <div className="hkPcfBlock">
+      <div className="reportBlock">
+        <h3>香港社工實務能力參考</h3>
+        <p>{assessment.frameworkLabel}</p>
+        <p className="disclaimerText">{assessment.disclaimer}</p>
+      </div>
+      <RadarScoreChart labels={hkPcfLabels} scores={assessment.scores} title="HK PCF 能力雷達圖" />
+      <div className="scoreGrid">
+        {Object.entries(assessment.scores).map(([label, value]) => (
+          <Metric key={label} label={hkPcfLabels[label] ?? label} value={value} max={10} />
+        ))}
+      </div>
+      <FeedbackList title="能力證據：有效表現" items={assessment.evidence.strengths} />
+      <FeedbackList title="能力證據：需留意" items={assessment.evidence.concerns} />
+      <FeedbackList title="關鍵片段" items={assessment.evidence.turningPoints} />
+      <FeedbackList title="錯過機會" items={assessment.evidence.missedOpportunities} />
+      <FeedbackList title="具體練習建議" items={assessment.practiceRecommendations} />
+      {assessment.personInEnvironmentAssessment && (
+        <div className="reportBlock">
+          <h3>人在情境評估</h3>
+          <p>{assessment.personInEnvironmentAssessment.summary}</p>
+        </div>
+      )}
+      {assessment.microMesoMacroCoverage && (
+        <div className="scoreGrid">
+          <Metric label="Micro 微觀" value={assessment.microMesoMacroCoverage.micro.score} max={10} />
+          <Metric label="Meso 中觀" value={assessment.microMesoMacroCoverage.meso.score} max={10} />
+          <Metric label="Macro 宏觀" value={assessment.microMesoMacroCoverage.macro.score} max={10} />
+        </div>
+      )}
+      {detailed && (
+        <>
+          <FeedbackList title="框架依據" items={assessment.frameworkBasis} />
+          <div className="reportBlock">
+            <h3>督導/研究者提示</h3>
+            <p>此區只顯示評估框架與 trace evidence 摘要；正式訓練視圖不提前展示未透露個案資料。</p>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -672,6 +802,89 @@ function DirectiveBasis({
   );
 }
 
+function RadarScoreChart({
+  labels,
+  scores,
+  title,
+}: {
+  labels: Record<string, string>;
+  scores: Record<string, number>;
+  title: string;
+}) {
+  const entries = Object.entries(scores).filter(([, value]) => Number.isFinite(value));
+  if (entries.length < 3) return null;
+  const size = 280;
+  const center = size / 2;
+  const radius = 86;
+  const labelRadius = 116;
+  const rings = [2, 4, 6, 8, 10];
+  const pointFor = (index: number, value: number, baseRadius = radius) => {
+    const angle = -Math.PI / 2 + (index / entries.length) * Math.PI * 2;
+    const distance = baseRadius * (Math.min(10, Math.max(0, value)) / 10);
+    return {
+      x: center + Math.cos(angle) * distance,
+      y: center + Math.sin(angle) * distance,
+    };
+  };
+  const ringPoints = (value: number) => entries.map((_, index) => pointFor(index, value)).map(pointString).join(' ');
+  const scorePoints = entries.map(([, value], index) => pointFor(index, value)).map(pointString).join(' ');
+  return (
+    <div className="radarChartBlock">
+      <h3>{title}</h3>
+      <div className="radarChartFrame">
+        <svg aria-label={title} className="radarChart" role="img" viewBox={`0 0 ${size} ${size}`}>
+          <title>{title}</title>
+          {rings.map((ring) => (
+            <polygon className="radarRing" key={ring} points={ringPoints(ring)} />
+          ))}
+          {entries.map(([key], index) => {
+            const outer = pointFor(index, 10);
+            const label = pointFor(index, 10, labelRadius);
+            return (
+              <g key={key}>
+                <line className="radarAxis" x1={center} x2={outer.x} y1={center} y2={outer.y} />
+                <text className="radarLabel" textAnchor={label.x < center - 8 ? 'end' : label.x > center + 8 ? 'start' : 'middle'} x={label.x} y={label.y}>
+                  {shortRadarLabel(labels[key] ?? key)}
+                </text>
+              </g>
+            );
+          })}
+          <polygon className="radarArea" points={scorePoints} />
+          <polyline className="radarLine" points={`${scorePoints} ${scorePoints.split(' ')[0]}`} />
+          {entries.map(([key, value], index) => {
+            const point = pointFor(index, value);
+            return <circle className="radarPoint" cx={point.x} cy={point.y} key={key} r="3.2" />;
+          })}
+        </svg>
+        <div className="radarLegend">
+          {entries.map(([key, value]) => (
+            <span key={key}>
+              {labels[key] ?? key} <strong>{value.toFixed(1)}</strong>
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function pointString(point: { x: number; y: number }) {
+  return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+}
+
+function shortRadarLabel(label: string) {
+  return label
+    .replace('人在情境與香港脈絡', '人在情境')
+    .replace('倫理、保密與界線', '倫理界線')
+    .replace('差異、反歧視與文化敏感', '差異敏感')
+    .replace('風險、安全與保護', '風險安全')
+    .replace('專業反思與督導運用', '專業反思')
+    .replace('建立關係與投入', '建立關係')
+    .replace('資料收集與評估', '資料評估')
+    .replace('自決與知情選擇', '自決選擇')
+    .replace('介入計劃與轉介', '計劃轉介');
+}
+
 function Metric({ label, value, max }: { label: string; value: number; max: number }) {
   const percentage = Math.min(100, Math.max(0, (value / max) * 100));
   return (
@@ -709,6 +922,18 @@ const competencyLabels: Record<string, string> = {
   ethicsAndBoundaries: '倫理與界線',
   culturalHumility: '文化謙遜',
   nextStepPlanning: '下一步計劃',
+};
+
+const hkPcfLabels: Record<string, string> = {
+  engagementAndRelationship: '建立關係與投入',
+  assessmentAndInformationGathering: '資料收集與評估',
+  personInEnvironmentAndHongKongContext: '人在情境與香港脈絡',
+  ethicsConfidentialityAndBoundaries: '倫理、保密與界線',
+  selfDeterminationAndInformedChoice: '自決與知情選擇',
+  diversityAntiDiscriminationAndCulturalSensitivity: '差異、反歧視與文化敏感',
+  riskSafetyAndSafeguarding: '風險、安全與保護',
+  interventionPlanningAndReferral: '介入計劃與轉介',
+  professionalReflectionAndUseOfSupervision: '專業反思與督導運用',
 };
 
 const simulationMethodOptions: Array<{ value: SimulationMethod; label: string; description: string }> = [

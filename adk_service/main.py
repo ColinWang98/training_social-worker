@@ -63,6 +63,17 @@ async def reset_session(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/session/export")
+async def export_session(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    try:
+        return coordinator.export_session(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/api/interview-turn")
 async def interview_turn(request: Request) -> dict[str, Any]:
     payload = await request.json()
@@ -88,6 +99,14 @@ async def final_review(request: Request) -> dict[str, Any]:
         return await coordinator.final_review(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/evidence-cards")
+async def evidence_cards(request: Request) -> dict[str, Any]:
+    try:
+        return coordinator.list_evidence_cards(dict(request.query_params))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

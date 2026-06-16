@@ -63,6 +63,15 @@ export type EvidenceCard = {
   quality: 'approved' | 'review' | 'reject';
   licenseNote: string;
   provenanceNote?: string;
+  reviewFlags?: string[];
+};
+
+export type EvidenceCardListResponse = {
+  cards: EvidenceCard[];
+  total: number;
+  limit: number;
+  offset: number;
+  backend: string;
 };
 
 export type EvidenceSummary = {
@@ -135,6 +144,9 @@ export type ClientRealismAssessment = {
 export type SimulationStrategySnapshot = {
   simulationMethod: SimulationMethod;
   label: string;
+  description?: string;
+  promptSections?: string[];
+  policyWeights?: Record<string, number>;
   promptFocus: string[];
   responseConstraints: string[];
   retrievalBoostSources: EvidenceSource[];
@@ -160,6 +172,10 @@ export type RetrievalOptions = {
 };
 
 export type GroundingProfile = {
+  profileId?: string;
+  caseId?: string;
+  caseType?: CaseType;
+  generationMode?: string;
   selfReportGrounding: Record<string, unknown>;
   lifeHistory: string;
   familySchoolWorkContext: string;
@@ -168,8 +184,35 @@ export type GroundingProfile = {
   avoidancePatterns: string[];
   speechStyle: string;
   caseReflections: Record<string, string[]>;
+  personInEnvironment?: Record<string, unknown>;
+  microSystem?: Record<string, unknown>;
+  mesoSystem?: Record<string, unknown>;
+  macroSystem?: Record<string, unknown>;
+  disclosureDevelopment?: Record<string, unknown>;
   adaptationLog: Array<Record<string, unknown>>;
   sourceEvidenceSummary: EvidenceSummary;
+};
+
+export type GroundingProfileSnapshot = {
+  profileId?: string;
+  caseType?: CaseType;
+  generationMode?: string;
+  profilePath?: string;
+  reflectionKeys?: string[];
+  sourceEvidenceSummary?: {
+    cardCount?: number;
+    topIssueTags?: string[];
+    sources?: Partial<Record<EvidenceSource, number>>;
+  };
+  adaptationCount?: number;
+};
+
+export type PieContextSnapshot = {
+  source: 'case_spec' | 'grounding_profile';
+  personInEnvironment?: Record<string, unknown>;
+  microSystem?: Record<string, unknown>;
+  mesoSystem?: Record<string, unknown>;
+  macroSystem?: Record<string, unknown>;
 };
 
 export type StudentQuestionAnalysis = {
@@ -336,6 +379,8 @@ export type ClientResponse = {
     violatedBeliefs: string[];
     disclosureRuleNotes: string[];
   };
+  profileGroundingSnapshot?: GroundingProfileSnapshot | null;
+  pieContextSnapshot?: PieContextSnapshot;
   agentTraceId?: string;
   safetyFlags?: string[];
   safetyHint?: string;
@@ -373,6 +418,42 @@ export type SupervisorReview = {
   summary: string;
 };
 
+export type HkPcfDomain =
+  | 'engagementAndRelationship'
+  | 'assessmentAndInformationGathering'
+  | 'personInEnvironmentAndHongKongContext'
+  | 'ethicsConfidentialityAndBoundaries'
+  | 'selfDeterminationAndInformedChoice'
+  | 'diversityAntiDiscriminationAndCulturalSensitivity'
+  | 'riskSafetyAndSafeguarding'
+  | 'interventionPlanningAndReferral'
+  | 'professionalReflectionAndUseOfSupervision';
+
+export type HkPcfAssessment = {
+  frameworkLabel: string;
+  frameworkBasis: string[];
+  scores: Record<HkPcfDomain, number>;
+  evidence: {
+    strengths: string[];
+    concerns: string[];
+    turningPoints: string[];
+    missedOpportunities: string[];
+  };
+  personInEnvironmentAssessment?: {
+    summary: string;
+    microEvidenceCount: number;
+    mesoEvidenceCount: number;
+    macroEvidenceCount: number;
+  };
+  microMesoMacroCoverage?: {
+    micro: { score: number; evidenceSignals: string[] };
+    meso: { score: number; evidenceSignals: string[] };
+    macro: { score: number; evidenceSignals: string[] };
+  };
+  practiceRecommendations: string[];
+  disclaimer: string;
+};
+
 export type PostSessionSupervisorReport = {
   overallSummary: string;
   competencyScores: {
@@ -402,4 +483,5 @@ export type PostSessionSupervisorReport = {
     learningObjectivesNotMet: string[];
   };
   suggestedPracticeGoals: string[];
+  hkPcfAssessment?: HkPcfAssessment;
 };
