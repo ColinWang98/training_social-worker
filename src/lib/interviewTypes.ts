@@ -31,10 +31,21 @@ export type SimulationMethod =
   | 'roleplay_doh'
   | 'annaagent_memory';
 
+export type ResponseLanguage = 'cantonese' | 'english';
 export type ResistanceLevel = 'none' | 'mild' | 'moderate' | 'high';
 export type AvatarDirectivePriority = 'safety' | 'reaction' | 'speaking' | 'idle';
 export type TrainingViewMode = 'trainee' | 'instructor';
 export type AvatarGazePattern = 'camera_soft' | 'avoidant' | 'downward' | 'scanning' | 'guarded';
+export type MouthViseme = 'closed' | 'soft' | 'open' | 'wide' | 'rounded' | 'front' | 'fv' | 'rest';
+export type RhubarbMouthShape = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'X';
+
+export type LipSyncTimeline = {
+  provider: 'rhubarb';
+  recognizer: string;
+  cues: { startMs: number; endMs: number; shape: RhubarbMouthShape }[];
+  mappedVisemes: { startMs: number; endMs: number; viseme: MouthViseme }[];
+  fallbackUsed?: boolean;
+};
 export type AvatarReactionFamily =
   | 'defensive'
   | 'withdrawn'
@@ -130,6 +141,8 @@ export type AvatarPerformancePlan = {
   motionScriptId?: string;
   motionScript?: string;
   reactionFamily?: AvatarReactionFamily;
+  idleMixOnly?: boolean;
+  idleAccentFamily?: AvatarReactionFamily;
   preferredClipIds?: string[];
   excludedRecentClipIds?: string[];
   variantPolicy?: 'avoid_recent' | 'soft_random';

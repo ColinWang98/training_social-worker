@@ -256,22 +256,77 @@ export function seatedMotionScriptTemplate(
 
   if (family === 'defensive') {
     const turn = side;
+    if (variantIndex === 1) {
+      return {
+        id: `sml_defensive_avoid_${suffix}`,
+        variant: suffix,
+        script: `
+@pose guarded_avoid {
+  chest bend forward ${a(0.04)};
+  neck bend forward ${a(0.08)};
+  head turn ${turn} ${a(0.20)};
+  gaze avoid_${turn} ${a(0.52)};
+  hands press_lap ${a(0.34)};
+}
+@pose held_avoid {
+  head turn ${turn} ${a(0.14)};
+  gaze avoid_${turn} ${a(0.38)};
+  hands press_lap ${a(0.24)};
+}
+@animation defensive_avoid {
+  0.00: baseline;
+  0.34: guarded_avoid;
+  1.20: held_avoid;
+  2.35: baseline;
+}
+main defensive_avoid;
+`.trim(),
+      };
+    }
+    if (variantIndex === 2) {
+      return {
+        id: `sml_defensive_side_guard_${suffix}`,
+        variant: suffix,
+        script: `
+@pose side_guard {
+  spine bend backward ${a(0.06)};
+  chest turn ${turn} ${a(0.14)};
+  head turn ${turn} ${a(0.24)};
+  gaze guarded ${a(0.42)};
+  hands press_lap ${a(0.30)};
+}
+@pose settle_guard {
+  chest turn ${turn} ${a(0.08)};
+  head turn ${turn} ${a(0.16)};
+  gaze guarded ${a(0.28)};
+  hands press_lap ${a(0.20)};
+}
+@animation defensive_side_guard {
+  0.00: baseline;
+  0.28: side_guard;
+  1.08: settle_guard;
+  2.25: baseline;
+}
+main defensive_side_guard;
+`.trim(),
+      };
+    }
     return {
       id: `sml_defensive_guard_${suffix}`,
       variant: suffix,
       script: `
 @pose recoil {
-  spine bend backward ${a(0.16)};
-  chest bend backward ${a(0.28)};
-  head turn ${turn} ${a(0.26)};
-  gaze avoid_${turn} ${a(0.58)};
-  hands press_lap ${a(0.38)};
+  spine bend backward ${a(0.08)};
+  chest bend backward ${a(0.16)};
+  head turn ${turn} ${a(0.22)};
+  gaze avoid_${turn} ${a(0.46)};
+  hands press_lap ${a(0.32)};
 }
 @pose guarded_hold {
-  chest bend backward ${a(0.18)};
-  head turn ${turn} ${a(0.16)};
-  gaze guarded ${a(0.35)};
-  hands press_lap ${a(0.28)};
+  chest bend backward ${a(0.08)};
+  head turn ${turn} ${a(0.12)};
+  gaze guarded ${a(0.26)};
+  hands press_lap ${a(0.22)};
 }
 @animation defensive_guard {
   0.00: baseline;

@@ -15,6 +15,7 @@ import {
 } from '../lib/avatarConfig';
 import {
   buildCantoneseVisemeTimeline,
+  buildRhubarbVisemeTimeline,
   CantoneseViseme,
   expressionProfileForAffect,
   visemeWeightsForTime,
@@ -24,6 +25,7 @@ import {
   AvatarDirectivePriority,
   AvatarGazePattern,
   AvatarPerformancePlan,
+  LipSyncTimeline,
   MotionCue,
 } from '../lib/interviewTypes';
 import {
@@ -82,6 +84,7 @@ type VrmStageProps = {
     startedAtMs: number;
     durationMs: number;
     active: boolean;
+    lipSync?: LipSyncTimeline;
   };
   autoBlink: boolean;
   vrmaFile: File | null;
@@ -117,6 +120,8 @@ export function VrmStage({
   const avatarFallbackKey = avatarFallbackPaths?.join('|') ?? '';
   const containerRef = useRef<HTMLDivElement | null>(null);
   const vrmRef = useRef<VRM | null>(null);
+  const avatarSceneRef = useRef<THREE.Object3D | null>(null);
+  const glbBoneRuntimeRef = useRef<ReturnType<typeof createGenericGlbBoneRuntime> | null>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const expressionRef = useRef(expressionWeights);
@@ -324,7 +329,60 @@ export function VrmStage({
           if (disposed) return;
           const vrm = gltf.userData.vrm as VRM | undefined;
           if (!vrm) {
-            throw new Error(`${modelPath} was parsed as glTF, but no VRM extension was found.`);
+            const gltfScene = gltf.scene;
+            gltfScene.visible = true;
+            gltfScene.position.set(0, 0, -0.02);
+            gltfScene.scale.setScalar(1);
+            gltfScene.traverse((object: THREE.Object3D) => {
+              object.visible = true;
+              object.layers.set(0);
+              object.frustumCulled = false;
+              if ('castShadow' in object) object.castShadow = true;
+              if ((object as THREE.Mesh).isMesh) {
+                normalizeRenderableMesh(object as THREE.Mesh);
+              }
+            });
+            alignGenericGlbForSeatedUpperBody(gltfScene);
+            scene.add(gltfScene);
+            avatarSceneRef.current = gltfScene;
+            vrmRef.current = null;
+            glbBoneRuntimeRef.current = createGenericGlbBoneRuntime(gltfScene);
+            seatedRuntimeAvailableRef.current = false;
+            currentExpressionRef.current = {};
+            currentMouthRef.current = 0;
+
+            const postLoadWarnings: string[] = ['non-VRM GLB: using upper-body seated visual adapter; lower-body VRM seating disabled'];
+            if (!frameAvatarUpperBody(camera, controls, gazeTarget, gltfScene)) {
+              postLoadWarnings.push('camera auto-frame skipped: invalid model bounds');
+            }
+            try {
+              arkitControllerRef.current = createMorphTargetExpressionController(gltfScene, modelPath);
+            } catch (error) {
+              postLoadWarnings.push(`ARKit controller skipped: ${error instanceof Error ? error.message : String(error)}`);
+              arkitControllerRef.current = null;
+            }
+
+            const arkitAvailable = (arkitControllerRef.current?.arkitTargetCount ?? 0) >= 52;
+            setStageNotice('');
+            const warningSuffix = postLoadWarnings.length ? ` (${postLoadWarnings.join('; ')})` : '';
+            onStatusChange({
+              avatarLoaded: true,
+              vrmaLoaded: false,
+              message: arkitAvailable
+                ? `Loaded ${avatarLabel ?? modelPath} as GLB with ARKit 52 blendshape targets.${warningSuffix}`
+                : `Loaded ${avatarLabel ?? modelPath} as GLB; ARKit blendshapes unavailable.${warningSuffix}`,
+              blendshapeDebug: arkitControllerRef.current
+                ? arkitDebugSnapshot(
+                  modelPath,
+                  arkitControllerRef.current,
+                  expressionProfileRef.current ?? 'neutral',
+                  'none',
+                  '',
+                  {},
+                )
+                : undefined,
+            });
+            return;
           }
 
           const postLoadWarnings: string[] = [];
@@ -350,7 +408,9 @@ export function VrmStage({
             }
           });
           scene.add(vrm.scene);
+          avatarSceneRef.current = vrm.scene;
           vrmRef.current = vrm;
+          glbBoneRuntimeRef.current = null;
           publishVrmStageDebug({
             avatarLoaded: true,
             loadPath: modelPath,
@@ -445,55 +505,63 @@ export function VrmStage({
     const applyExpressions = (elapsed: number, reactionPulse: number, delta: number) => {
       const vrm = vrmRef.current;
       const manager = vrm?.expressionManager;
-      if (!manager) return;
-
-      const weights = expressionRef.current;
-      const current = currentExpressionRef.current;
-      const expressionNames = new Set([...Object.keys(weights), ...Object.keys(current)]);
-      manager.resetValues();
-      expressionNames.forEach((name) => {
-        const baseTarget = weights[name as keyof ExpressionWeights] ?? 0;
-        const target = clampExpression(baseTarget * (1 + reactionPulse * 0.35));
-        const previous = clampExpression(current[name as keyof ExpressionWeights] ?? 0);
-        const next = dampValue(previous, target, delta, expressionTimeConstant(name, target > previous));
-        if (next > 0.01) {
-          setVrmExpressionValue(manager, name, next);
-          current[name as keyof ExpressionWeights] = next;
-        } else {
-          delete current[name as keyof ExpressionWeights];
-        }
-      });
+      let blinkStrength = 0;
 
       if (autoBlinkRef.current) {
         const phase = elapsed % 4.8;
-        const blink =
+        blinkStrength =
           phase > 4.46 && phase < 4.62
             ? Math.sin(((phase - 4.46) / 0.16) * Math.PI)
             : 0;
-        setVrmExpressionValue(manager, 'blink', Math.max(getVrmExpressionValue(manager, 'blink'), blink));
       }
 
-      const mouth = clampExpression(speechLevelRef.current);
-      const mouthTarget = mouth > 0.03 ? mouth * 0.82 : 0;
-      currentMouthRef.current = dampValue(
-        currentMouthRef.current,
-        mouthTarget,
-        delta,
-        mouthTarget > currentMouthRef.current ? 0.055 : 0.14,
-      );
-      if (currentMouthRef.current > 0.025) {
-        setVrmExpressionValue(manager, 'aa', Math.max(getVrmExpressionValue(manager, 'aa'), currentMouthRef.current));
-      }
+      if (manager) {
+        const weights = expressionRef.current;
+        const current = currentExpressionRef.current;
+        const expressionNames = new Set([...Object.keys(weights), ...Object.keys(current)]);
+        manager.resetValues();
+        expressionNames.forEach((name) => {
+          const baseTarget = weights[name as keyof ExpressionWeights] ?? 0;
+          const target = clampExpression(baseTarget * (1 + reactionPulse * 0.35));
+          const previous = clampExpression(current[name as keyof ExpressionWeights] ?? 0);
+          const next = dampValue(previous, target, delta, expressionTimeConstant(name, target > previous));
+          if (next > 0.01) {
+            setVrmExpressionValue(manager, name, next);
+            current[name as keyof ExpressionWeights] = next;
+          } else {
+            delete current[name as keyof ExpressionWeights];
+          }
+        });
 
-      manager.update();
+        if (blinkStrength > 0) {
+          setVrmExpressionValue(manager, 'blink', Math.max(getVrmExpressionValue(manager, 'blink'), blinkStrength));
+        }
+
+        const mouth = clampExpression(speechLevelRef.current);
+        const mouthTarget = mouth > 0.03 ? mouth * 0.82 : 0;
+        currentMouthRef.current = dampValue(
+          currentMouthRef.current,
+          mouthTarget,
+          delta,
+          mouthTarget > currentMouthRef.current ? 0.055 : 0.14,
+        );
+        if (currentMouthRef.current > 0.025) {
+          setVrmExpressionValue(manager, 'aa', Math.max(getVrmExpressionValue(manager, 'aa'), currentMouthRef.current));
+        }
+
+        manager.update();
+      }
 
       const arkitController = arkitControllerRef.current;
       if (arkitController) {
         const playback = visemePlaybackRef.current;
         const profile = expressionProfileRef.current ?? 'neutral';
-        const profileWeights = expressionProfileForAffect(profile, weights, motionIntensityRef.current);
+        const profileWeights = expressionProfileForAffect(profile, expressionRef.current, motionIntensityRef.current);
+        const rhubarbTimeline = playback.active ? buildRhubarbVisemeTimeline(playback.lipSync) : [];
         const timeline = playback.active
-          ? buildCantoneseVisemeTimeline(playback.text, playback.durationMs)
+          ? rhubarbTimeline.length > 0
+            ? rhubarbTimeline
+            : buildCantoneseVisemeTimeline(playback.text, playback.durationMs)
           : [];
         const viseme = visemeWeightsForTime(
           timeline,
@@ -501,10 +569,10 @@ export function VrmStage({
           speechLevelRef.current,
         );
         const blink =
-          autoBlinkRef.current && getVrmExpressionValue(manager, 'blink')
+          autoBlinkRef.current && blinkStrength > 0
             ? {
-              eyeBlinkLeft: getVrmExpressionValue(manager, 'blink'),
-              eyeBlinkRight: getVrmExpressionValue(manager, 'blink'),
+              eyeBlinkLeft: blinkStrength,
+              eyeBlinkRight: blinkStrength,
             }
             : {};
         const arkitWeights = mergeArkitWeights(profileWeights, viseme.weights, blink);
@@ -530,32 +598,32 @@ export function VrmStage({
       }
     };
 
-    const tick = () => {
-      const delta = clock.getDelta();
-      const elapsed = clock.elapsedTime;
-      tickCount += 1;
-      let expressionReactionPulse = 0;
-      let motionRuntimeDebug: AvatarMotionDebug | undefined;
-      controls.update();
-      mixerRef.current?.update(delta);
-      if (vrmRef.current) {
-        if (tickCount < 120) {
-          frameAvatarUpperBody(camera, controls, gazeTarget, vrmRef.current.scene);
-        }
+    const computeAvatarMotionFrame = (elapsed: number, delta: number) => {
         const performanceState = performanceControllerRef.current.update(
           performancePlanRef.current,
           reactionKeyRef.current,
           elapsed,
         );
-        const activeCue = activeMotionCue(
+        const responseCue = activeMotionCue(
           gestureRef.current,
           baselineMoodRef.current,
           motionCueRef.current,
           caseRestingCueRef.current,
           caseBaselineMoodRef.current,
         );
-        expressionReactionPulse = performanceState.reactionWeight;
-        const activeIntensity = performanceState.reactionWeight > 0
+        const baselineCue = activeMotionCue(
+          undefined,
+          undefined,
+          'neutral',
+          caseRestingCueRef.current,
+          caseBaselineMoodRef.current,
+        );
+        const isResponseGestureActive =
+          performanceState.attackWeight > 0.001 ||
+          performanceState.holdWeight > 0.001 ||
+          performanceState.releaseWeight > 0.001;
+        const activeCue = isResponseGestureActive ? responseCue : baselineCue;
+        const activeIntensity = isResponseGestureActive
           ? motionIntensityRef.current
           : Math.min(motionIntensityRef.current, caseIdleIntensityRef.current);
         const idlePulse = baselineIdlePulse(
@@ -564,6 +632,7 @@ export function VrmStage({
           caseIdleIntensityRef.current,
           speechLevelRef.current,
           idleRandomControllerRef.current.update(elapsed, delta),
+          performancePlanRef.current?.idleAccentFamily,
         );
         const residualReactionPulse = Math.max(
           performanceState.reactionWeight,
@@ -586,7 +655,6 @@ export function VrmStage({
           performanceState,
           activeIntensity,
         );
-        motionRuntimeDebug = scriptedMotion.debug;
         const scriptedReactionPose = scriptedMotion.sample
           ? addSeatedMotionOverlay(
             idleBlendedPose,
@@ -613,63 +681,115 @@ export function VrmStage({
         const activeGazeCue = scriptedMotion.sample
           ? motionCueForScriptedGaze(scriptedMotion.sample.gaze, activeCue)
           : activeCue;
-        const upperBodyAnimationActive = policyActionActiveRef.current || manualVrmaActiveRef.current;
-        if (ENABLE_SEATED_BONE_RUNTIME && seatedRuntimeAvailableRef.current) {
-          const isConservativeRig = vrmRef.current.scene.userData.rigProfile === 'vrm0Conservative';
-          if (wasUpperBodyAnimationActiveRef.current && !upperBodyAnimationActive) {
-            safePoseRuntimeRef.current.captureFromVrm(vrmRef.current, true);
-          }
-          try {
-            const targetPose = buildSeatedPose(
-              vrmRef.current,
-              activeCue,
-              activeIntensity,
-              residualReactionPulse,
-              elapsed,
-              !upperBodyAnimationActive,
-              finalPose,
-              isConservativeRig,
-            );
-            safePoseRuntimeRef.current.apply(vrmRef.current, targetPose, delta, {
-              upperBody: !upperBodyAnimationActive,
-              lowerBody: true,
-              conservativeRig: isConservativeRig,
-            });
-            if (!validateVisibleAvatarBounds(vrmRef.current.scene)) {
-              throw new Error('runtime produced invalid avatar bounds');
-            }
-          } catch (error) {
-            seatedRuntimeAvailableRef.current = false;
-            const fallbackPose = buildSeatedPose(
-              vrmRef.current,
-              'neutral',
-              0.45,
-              0,
-              elapsed,
-              true,
-              undefined,
-              isConservativeRig,
-            );
-            applySeatedPose(vrmRef.current, fallbackPose);
-            safePoseRuntimeRef.current.reset(fallbackPose);
-            publishVrmStageDebug({
-              seatedRuntimeDisabled: true,
-              seatedRuntimeError: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-        wasUpperBodyAnimationActiveRef.current = upperBodyAnimationActive;
+        return {
+          activeCue,
+          activeGazeCue,
+          activeIntensity,
+          expressionReactionPulse: performanceState.reactionWeight,
+          finalPose,
+          motionRuntimeDebug: scriptedMotion.debug,
+          residualReactionPulse,
+        };
+    };
+
+    const tick = () => {
+      const delta = clock.getDelta();
+      const elapsed = clock.elapsedTime;
+      tickCount += 1;
+      let expressionReactionPulse = 0;
+      let motionRuntimeDebug: AvatarMotionDebug | undefined;
+      controls.update();
+      mixerRef.current?.update(delta);
+      const avatarScene = avatarSceneRef.current;
+      const motionFrame = avatarScene ? computeAvatarMotionFrame(elapsed, delta) : null;
+      if (avatarScene && !vrmRef.current && tickCount < 120) {
+        frameAvatarUpperBody(camera, controls, gazeTarget, avatarScene);
+      }
+      if (avatarScene && !vrmRef.current && glbBoneRuntimeRef.current && motionFrame) {
+        expressionReactionPulse = motionFrame.expressionReactionPulse;
+        motionRuntimeDebug = motionFrame.motionRuntimeDebug;
+        glbBoneRuntimeRef.current.apply(motionFrame.finalPose, delta, {
+          intensity: motionFrame.activeIntensity,
+          reactionWeight: motionFrame.residualReactionPulse,
+          speechLevel: speechLevelRef.current,
+        });
         updateGazeTarget(
           camera,
           gazeTarget,
-          activeGazeCue,
-          activeIntensity,
-          residualReactionPulse,
+          motionFrame.activeGazeCue,
+          motionFrame.activeIntensity,
+          motionFrame.residualReactionPulse,
           elapsed,
           delta,
           transitionMsRef.current,
           caseGazePatternRef.current,
         );
+      }
+      if (vrmRef.current) {
+        if (tickCount < 120) {
+          frameAvatarUpperBody(camera, controls, gazeTarget, vrmRef.current.scene);
+        }
+        if (motionFrame) {
+          expressionReactionPulse = motionFrame.expressionReactionPulse;
+          motionRuntimeDebug = motionFrame.motionRuntimeDebug;
+          const upperBodyAnimationActive = policyActionActiveRef.current || manualVrmaActiveRef.current;
+          if (ENABLE_SEATED_BONE_RUNTIME && seatedRuntimeAvailableRef.current) {
+            const isConservativeRig = vrmRef.current.scene.userData.rigProfile === 'vrm0Conservative';
+            if (wasUpperBodyAnimationActiveRef.current && !upperBodyAnimationActive) {
+              safePoseRuntimeRef.current.captureFromVrm(vrmRef.current, true);
+            }
+            try {
+              const targetPose = buildSeatedPose(
+                vrmRef.current,
+                motionFrame.activeCue,
+                motionFrame.activeIntensity,
+                motionFrame.residualReactionPulse,
+                elapsed,
+                !upperBodyAnimationActive,
+                motionFrame.finalPose,
+                isConservativeRig,
+              );
+              safePoseRuntimeRef.current.apply(vrmRef.current, targetPose, delta, {
+                upperBody: !upperBodyAnimationActive,
+                lowerBody: true,
+                conservativeRig: isConservativeRig,
+              });
+              if (!validateVisibleAvatarBounds(vrmRef.current.scene)) {
+                throw new Error('runtime produced invalid avatar bounds');
+              }
+            } catch (error) {
+              seatedRuntimeAvailableRef.current = false;
+              const fallbackPose = buildSeatedPose(
+                vrmRef.current,
+                'neutral',
+                0.45,
+                0,
+                elapsed,
+                true,
+                undefined,
+                isConservativeRig,
+              );
+              applySeatedPose(vrmRef.current, fallbackPose);
+              safePoseRuntimeRef.current.reset(fallbackPose);
+              publishVrmStageDebug({
+                seatedRuntimeDisabled: true,
+                seatedRuntimeError: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          wasUpperBodyAnimationActiveRef.current = upperBodyAnimationActive;
+          updateGazeTarget(
+            camera,
+            gazeTarget,
+            motionFrame.activeGazeCue,
+            motionFrame.activeIntensity,
+            motionFrame.residualReactionPulse,
+            elapsed,
+            delta,
+            transitionMsRef.current,
+            caseGazePatternRef.current,
+          );
+        }
       }
       applyExpressions(elapsed, expressionReactionPulse, delta);
       vrmRef.current?.update(delta);
@@ -688,9 +808,9 @@ export function VrmStage({
         lastDebugAt = elapsed;
         const size = new THREE.Vector2();
         renderer.getSize(size);
-        const vrmBounds = vrmRef.current ? readableBounds(vrmRef.current.scene) : null;
+        const vrmBounds = avatarSceneRef.current ? readableBounds(avatarSceneRef.current) : null;
         publishVrmStageDebug({
-          avatarLoaded: Boolean(vrmRef.current),
+          avatarLoaded: Boolean(avatarSceneRef.current),
           tickCount,
           elapsed,
           sceneChildren: scene.children.length,
@@ -704,7 +824,7 @@ export function VrmStage({
         });
         if (motionRuntimeDebug) {
           onStatusChange({
-            avatarLoaded: Boolean(vrmRef.current),
+            avatarLoaded: Boolean(avatarSceneRef.current),
             vrmaLoaded: Boolean(policyActionActiveRef.current || manualVrmaActiveRef.current),
             motionDebug: motionRuntimeDebug,
           });
@@ -729,6 +849,8 @@ export function VrmStage({
       renderer.domElement.remove();
       actionRef.current = null;
       vrmRef.current = null;
+      avatarSceneRef.current = null;
+      glbBoneRuntimeRef.current = null;
       mixerRef.current = null;
     };
   }, [avatarFallbackKey, avatarFallbackPaths, avatarLabel, avatarPath, onStatusChange]);
@@ -968,10 +1090,10 @@ function createSeatedMotionScriptController() {
               intensity: plan?.motionScale ?? activeIntensity,
             });
         const result = compileSeatedMotionScript(template.script, {
-          id: plan?.motionScriptId ?? template.id,
+          id: plan?.motionScript ? plan?.motionScriptId ?? template.id : template.id,
           language: plan?.motionLanguage ?? 'seated-v1',
         });
-        activeScriptId = plan?.motionScriptId ?? template.id;
+        activeScriptId = plan?.motionScript ? plan?.motionScriptId ?? template.id : template.id;
         activeVariant = template.variant;
         validationIssues = result.issues.map((issue) => issue.message);
         activeProgram = result.ok ? result.program : null;
@@ -997,6 +1119,8 @@ function createSeatedMotionScriptController() {
         keyframeCount: activeProgram?.keyframes.length ?? 0,
         durationMs: activeProgram?.durationMs ?? 0,
         reactionFamily: plan?.reactionFamily ?? 'soft_engagement',
+        idleMixOnly: Boolean(plan?.idleMixOnly),
+        idleAccentFamily: plan?.idleAccentFamily ?? plan?.reactionFamily ?? 'soft_engagement',
         reactionWeight: performanceState.reactionWeight,
         bridgeProgress: performanceState.bridgeProgress,
         recentMotionHistory: [...recentMotionHistory],
@@ -1037,7 +1161,7 @@ function createAvatarPerformanceController() {
         releaseDuration = Math.max(0.2, (plan?.releaseMs ?? 700) / 1000);
         returnBridgeDuration = Math.max(0.25, (plan?.returnBridgeMs ?? 700) / 1000);
         attackDuration = Math.max(0.12, (plan?.attackMs ?? 280) / 1000);
-        selected = selectProceduralReactionClip(plan, recentClipIds);
+        selected = plan?.idleMixOnly ? null : selectProceduralReactionClip(plan, recentClipIds);
         if (selected) {
           recentClipIds.unshift(selected.clip.id);
           recentClipIds.splice(5);
@@ -1248,50 +1372,60 @@ function baselineIdlePulse(
   idleIntensity: number,
   speechLevel: number,
   randomState: IdleRandomState,
+  idleAccentFamily?: ReactionFamily,
 ): BlendedPose {
   const intensity = Math.min(1, Math.max(0.15, idleIntensity));
   const breath = Math.sin(elapsed * 1.35) * 0.018 * intensity;
   const slow = Math.sin(elapsed * 0.47) * 0.014 * intensity;
   const fidget = Math.sin(elapsed * 3.1) * 0.02 * intensity;
+  const micro = Math.sin(elapsed * 1.9 + 0.7) * 0.012 * intensity;
   const speech = Math.min(1, Math.max(0, speechLevel)) * 0.035;
   const randomScale = intensity * 0.75;
-  const guarded = clipId.includes('defensive') || clipId.includes('guarded');
-  const withdrawn = clipId.includes('withdrawn') || clipId.includes('ashamed');
-  const anxious = clipId.includes('anxious');
-  const reflective = clipId.includes('reflective');
+  const guarded = clipId.includes('defensive') || clipId.includes('guarded') || idleAccentFamily === 'defensive';
+  const withdrawn =
+    clipId.includes('withdrawn') ||
+    clipId.includes('ashamed') ||
+    idleAccentFamily === 'withdrawn' ||
+    idleAccentFamily === 'ashamed' ||
+    idleAccentFamily === 'risk';
+  const anxious = clipId.includes('anxious') || idleAccentFamily === 'anxious';
+  const reflective = clipId.includes('reflective') || idleAccentFamily === 'reflective' || idleAccentFamily === 'soft_engagement';
+  const accentScale = idleAccentFamily ? 0.55 : 0;
 
   return {
     pose: {
-      hipX: guarded ? -0.015 : 0,
+      hipX: guarded ? -0.006 : 0,
       hipY: 0,
-      hipZ: guarded ? -0.012 : 0,
-      spineX: breath + (guarded ? -0.035 : withdrawn ? 0.032 : reflective ? 0.018 : 0),
+      hipZ: guarded ? -0.006 : 0,
+      spineX: breath + (guarded ? -0.014 : withdrawn ? 0.032 : reflective ? 0.018 : 0),
       spineY: slow * 0.4 + randomState.spineY * randomScale,
-      chestX: breath + (guarded ? -0.05 : withdrawn ? 0.04 : reflective ? 0.025 : 0),
+      chestX: breath + (guarded ? -0.02 : withdrawn ? 0.04 : reflective ? 0.025 : 0),
       chestY: slow + randomState.chestY * randomScale,
       chestZ: 0,
       neckX: (withdrawn ? -0.035 : speech) + randomState.neckX * randomScale,
-      neckY: (anxious ? slow * 2.2 : slow) + randomState.neckY * randomScale,
+      neckY: (anxious ? slow * 2.2 : guarded ? micro * 2.2 : slow) + randomState.neckY * randomScale,
       headX: (withdrawn ? -0.055 : speech + Math.sin(elapsed * 0.62) * 0.012) + randomState.headX * randomScale,
-      headY: (anxious ? Math.sin(elapsed * 0.85) * 0.05 : slow * 1.2) + randomState.headY * randomScale,
+      headY:
+        (anxious ? Math.sin(elapsed * 0.85) * 0.05 : guarded ? micro * 3.2 : slow * 1.2) +
+        randomState.headY * randomScale,
       headZ: guarded ? -0.01 : 0,
-      armX: (anxious ? 0.025 + fidget : 0) + randomState.armX * randomScale,
-      forearmX: (anxious ? 0.04 + fidget : 0) + randomState.forearmX * randomScale,
-      leftArmY: anxious ? fidget : 0,
-      rightArmY: anxious ? -fidget : 0,
+      armX: (anxious ? 0.025 + fidget : guarded ? 0.012 * accentScale : 0) + randomState.armX * randomScale,
+      forearmX: (anxious ? 0.04 + fidget : guarded ? 0.018 * accentScale : 0) + randomState.forearmX * randomScale,
+      leftArmY: anxious ? fidget : guarded ? -micro * accentScale : 0,
+      rightArmY: anxious ? -fidget : guarded ? micro * accentScale : 0,
       leftArmZ: 0,
       rightArmZ: 0,
     },
     armPose: {
-      upperArmX: anxious ? fidget * 0.35 : 0,
+      upperArmX: anxious ? fidget * 0.35 : guarded ? 0.018 * accentScale : 0,
       leftUpperArmY: anxious ? fidget * 0.25 : 0,
       rightUpperArmY: anxious ? -fidget * 0.25 : 0,
       leftUpperArmZ: 0,
       rightUpperArmZ: 0,
-      leftLowerArmX: anxious ? fidget * 0.45 : 0,
-      rightLowerArmX: anxious ? -fidget * 0.45 : 0,
-      leftLowerArmY: anxious ? -fidget * 0.5 : 0,
-      rightLowerArmY: anxious ? fidget * 0.5 : 0,
+      leftLowerArmX: anxious ? fidget * 0.45 : guarded ? 0.032 * accentScale : 0,
+      rightLowerArmX: anxious ? -fidget * 0.45 : guarded ? 0.032 * accentScale : 0,
+      leftLowerArmY: anxious ? -fidget * 0.5 : guarded ? -micro * accentScale : 0,
+      rightLowerArmY: anxious ? fidget * 0.5 : guarded ? micro * accentScale : 0,
       leftLowerArmZ: 0,
       rightLowerArmZ: 0,
       handX: 0,
@@ -1966,6 +2100,26 @@ function validateVisibleAvatarBounds(object: THREE.Object3D) {
   );
 }
 
+function alignGenericGlbForSeatedUpperBody(scene: THREE.Object3D) {
+  scene.updateMatrixWorld(true);
+  const hips = findPrimaryHumanoidRoot(scene);
+  if (hips) {
+    const hipsWorld = new THREE.Vector3();
+    hips.getWorldPosition(hipsWorld);
+    scene.position.y += 0.52 - hipsWorld.y;
+  } else {
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    if (Number.isFinite(size.y) && size.y > 0.4) {
+      scene.position.y += 0.52 - (box.min.y + size.y * 0.54);
+    }
+  }
+  scene.position.x = 0;
+  scene.position.z = -0.16;
+  scene.updateMatrixWorld(true);
+}
+
 function normalizeRenderableMesh(mesh: THREE.Mesh) {
   mesh.visible = true;
   mesh.frustumCulled = false;
@@ -1981,6 +2135,250 @@ function normalizeRenderableMesh(mesh: THREE.Mesh) {
     }
     material.needsUpdate = true;
   });
+}
+
+type GenericGlbBoneName =
+  | 'hips'
+  | 'spine'
+  | 'chest'
+  | 'upperChest'
+  | 'neck'
+  | 'head'
+  | 'leftShoulder'
+  | 'rightShoulder'
+  | 'leftUpperArm'
+  | 'rightUpperArm'
+  | 'leftLowerArm'
+  | 'rightLowerArm'
+  | 'leftHand'
+  | 'rightHand'
+  | 'leftUpperLeg'
+  | 'rightUpperLeg'
+  | 'leftLowerLeg'
+  | 'rightLowerLeg'
+  | 'leftFoot'
+  | 'rightFoot';
+
+type GenericGlbBoneRuntime = ReturnType<typeof createGenericGlbBoneRuntime>;
+
+const STREAMOJI_GLB_ARM_CALIBRATION = {
+  shoulderBaseZ: 0.1,
+  shoulderOverlayZ: 0.02,
+  upperArmForwardZ: 0.72,
+  upperArmOverlayZ: 0.08,
+  lowerArmForwardX: 0.62,
+  lowerArmInwardY: 0.2,
+  lowerArmFoldZ: 0.1,
+  lowerArmOverlayZ: 0.055,
+  handPitchX: -0.08,
+  handInwardY: 0.05,
+  handOverlay: 0.055,
+};
+
+function createGenericGlbBoneRuntime(scene: THREE.Object3D) {
+  const humanoidRoot = findPrimaryHumanoidRoot(scene) ?? scene;
+  const bones: Partial<Record<GenericGlbBoneName, THREE.Object3D>> = {
+    hips: humanoidRoot,
+    spine: findDescendantBone(humanoidRoot, ['Spine']),
+    chest: findDescendantBone(humanoidRoot, ['Spine1', 'Chest']),
+    upperChest: findDescendantBone(humanoidRoot, ['Spine2', 'UpperChest']),
+    neck: findDescendantBone(humanoidRoot, ['Neck']),
+    head: findDescendantBone(humanoidRoot, ['Head']),
+    leftShoulder: findDescendantBone(humanoidRoot, ['LeftShoulder']),
+    rightShoulder: findDescendantBone(humanoidRoot, ['RightShoulder']),
+    leftUpperArm: findDescendantBone(humanoidRoot, ['LeftArm', 'LeftUpperArm']),
+    rightUpperArm: findDescendantBone(humanoidRoot, ['RightArm', 'RightUpperArm']),
+    leftLowerArm: findDescendantBone(humanoidRoot, ['LeftForeArm', 'LeftLowerArm']),
+    rightLowerArm: findDescendantBone(humanoidRoot, ['RightForeArm', 'RightLowerArm']),
+    leftHand: findDescendantBone(humanoidRoot, ['LeftHand']),
+    rightHand: findDescendantBone(humanoidRoot, ['RightHand']),
+    leftUpperLeg: findDescendantBone(humanoidRoot, ['LeftUpLeg', 'LeftUpperLeg']),
+    rightUpperLeg: findDescendantBone(humanoidRoot, ['RightUpLeg', 'RightUpperLeg']),
+    leftLowerLeg: findDescendantBone(humanoidRoot, ['LeftLeg', 'LeftLowerLeg']),
+    rightLowerLeg: findDescendantBone(humanoidRoot, ['RightLeg', 'RightLowerLeg']),
+    leftFoot: findDescendantBone(humanoidRoot, ['LeftFoot']),
+    rightFoot: findDescendantBone(humanoidRoot, ['RightFoot']),
+  };
+  const rest = new Map<THREE.Object3D, THREE.Quaternion>();
+  Object.values(bones).forEach((bone) => {
+    if (bone) rest.set(bone, bone.quaternion.clone());
+  });
+
+  return {
+    apply(
+      pose: BlendedPose,
+      delta: number,
+      options: { intensity: number; reactionWeight: number; speechLevel: number },
+    ) {
+      const scale = Math.max(0.08, Math.min(0.28, options.intensity * 0.22 + options.reactionWeight * 0.04));
+      const speech = Math.max(0, Math.min(1, options.speechLevel)) * 0.014;
+      const q = (x: number, y: number, z: number) =>
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(x * scale, y * scale, z * scale, 'XYZ'));
+      const armQ = (x: number, y: number, z: number) =>
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, 'XYZ'));
+
+      applyGenericGlbBone(bones.hips, rest, armQ(-0.18, 0, 0), delta, 0.28);
+      applyGenericGlbBone(bones.leftUpperLeg, rest, armQ(-1.12, 0.08, 0.06), delta, 0.28);
+      applyGenericGlbBone(bones.rightUpperLeg, rest, armQ(-1.12, -0.08, -0.06), delta, 0.28);
+      applyGenericGlbBone(bones.leftLowerLeg, rest, armQ(1.18, 0, 0.02), delta, 0.28);
+      applyGenericGlbBone(bones.rightLowerLeg, rest, armQ(1.18, 0, -0.02), delta, 0.28);
+      applyGenericGlbBone(bones.leftFoot, rest, armQ(-0.18, 0, 0.04), delta, 0.28);
+      applyGenericGlbBone(bones.rightFoot, rest, armQ(-0.18, 0, -0.04), delta, 0.28);
+
+      applyGenericGlbBone(bones.spine, rest, q(pose.pose.spineX * 0.6, pose.pose.spineY * 0.45, 0), delta);
+      applyGenericGlbBone(bones.chest, rest, q(pose.pose.chestX * 0.6, pose.pose.chestY * 0.45, pose.pose.chestZ * 0.4), delta);
+      applyGenericGlbBone(
+        bones.upperChest,
+        rest,
+        q(pose.pose.chestX * 0.35, pose.pose.chestY * 0.28, pose.pose.chestZ * 0.25),
+        delta,
+      );
+      applyGenericGlbBone(bones.neck, rest, q(pose.pose.neckX * 0.75 + speech, pose.pose.neckY * 0.65, 0), delta);
+      applyGenericGlbBone(bones.head, rest, q(pose.pose.headX * 0.78 + speech, pose.pose.headY * 0.72, pose.pose.headZ * 0.62), delta);
+
+      const arm = STREAMOJI_GLB_ARM_CALIBRATION;
+      applyGenericGlbBone(
+        bones.leftShoulder,
+        rest,
+        armQ(0.018, 0.02, -arm.shoulderBaseZ - pose.armPose.leftUpperArmZ * arm.shoulderOverlayZ),
+        delta,
+        0.2,
+      );
+      applyGenericGlbBone(
+        bones.rightShoulder,
+        rest,
+        armQ(0.018, -0.02, arm.shoulderBaseZ - pose.armPose.rightUpperArmZ * arm.shoulderOverlayZ),
+        delta,
+        0.2,
+      );
+      applyGenericGlbBone(
+        bones.leftUpperArm,
+        rest,
+        armQ(
+          0.18 + pose.armPose.upperArmX * 0.08,
+          -0.08 + pose.armPose.leftUpperArmY * 0.055,
+          arm.upperArmForwardZ - pose.armPose.leftUpperArmZ * arm.upperArmOverlayZ,
+        ),
+        delta,
+        0.22,
+      );
+      applyGenericGlbBone(
+        bones.rightUpperArm,
+        rest,
+        armQ(
+          0.18 + pose.armPose.upperArmX * 0.08,
+          0.08 + pose.armPose.rightUpperArmY * 0.055,
+          -arm.upperArmForwardZ - pose.armPose.rightUpperArmZ * arm.upperArmOverlayZ,
+        ),
+        delta,
+        0.22,
+      );
+      applyGenericGlbBone(
+        bones.leftLowerArm,
+        rest,
+        armQ(
+          arm.lowerArmForwardX + pose.armPose.leftLowerArmX * 0.075,
+          -arm.lowerArmInwardY + pose.armPose.leftLowerArmY * 0.08,
+          -arm.lowerArmFoldZ - pose.armPose.leftLowerArmZ * arm.lowerArmOverlayZ,
+        ),
+        delta,
+        0.24,
+      );
+      applyGenericGlbBone(
+        bones.rightLowerArm,
+        rest,
+        armQ(
+          arm.lowerArmForwardX + pose.armPose.rightLowerArmX * 0.075,
+          arm.lowerArmInwardY + pose.armPose.rightLowerArmY * 0.08,
+          arm.lowerArmFoldZ - pose.armPose.rightLowerArmZ * arm.lowerArmOverlayZ,
+        ),
+        delta,
+        0.24,
+      );
+      applyGenericGlbBone(
+        bones.leftHand,
+        rest,
+        armQ(
+          arm.handPitchX + pose.armPose.handX * 0.045,
+          -arm.handInwardY + pose.armPose.leftHandY * arm.handOverlay,
+          -pose.armPose.leftHandZ * arm.handOverlay,
+        ),
+        delta,
+        0.18,
+      );
+      applyGenericGlbBone(
+        bones.rightHand,
+        rest,
+        armQ(
+          arm.handPitchX + pose.armPose.handX * 0.045,
+          arm.handInwardY + pose.armPose.rightHandY * arm.handOverlay,
+          -pose.armPose.rightHandZ * arm.handOverlay,
+        ),
+        delta,
+        0.18,
+      );
+      scene.updateMatrixWorld(true);
+    },
+  };
+}
+
+function findPrimaryHumanoidRoot(scene: THREE.Object3D) {
+  const candidates: THREE.Object3D[] = [];
+  scene.traverse((object) => {
+    if (object.name === 'Hips') candidates.push(object);
+  });
+  return candidates
+    .map((candidate) => ({
+      root: candidate,
+      score: humanoidRootScore(candidate),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .find((candidate) => candidate.score >= 9)?.root;
+}
+
+function humanoidRootScore(root: THREE.Object3D) {
+  const requiredGroups = [
+    ['Spine'],
+    ['Spine1', 'Chest'],
+    ['Spine2', 'UpperChest'],
+    ['Neck'],
+    ['Head'],
+    ['LeftShoulder'],
+    ['RightShoulder'],
+    ['LeftArm', 'LeftUpperArm'],
+    ['RightArm', 'RightUpperArm'],
+    ['LeftForeArm', 'LeftLowerArm'],
+    ['RightForeArm', 'RightLowerArm'],
+    ['LeftHand'],
+    ['RightHand'],
+  ];
+  return requiredGroups.reduce((score, names) => score + (findDescendantBone(root, names) ? 1 : 0), 0);
+}
+
+function findDescendantBone(root: THREE.Object3D, names: string[]) {
+  let found: THREE.Object3D | undefined;
+  root.traverse((object) => {
+    if (found || !names.includes(object.name)) return;
+    if (object.type === 'Bone' || (object as THREE.Bone).isBone) {
+      found = object;
+      return;
+    }
+    found = object;
+  });
+  return found;
+}
+
+function applyGenericGlbBone(
+  bone: THREE.Object3D | undefined,
+  rest: Map<THREE.Object3D, THREE.Quaternion>,
+  additive: THREE.Quaternion,
+  delta: number,
+  timeConstant = 0.16,
+) {
+  if (!bone) return;
+  const restRotation = rest.get(bone) ?? bone.quaternion.clone();
+  const target = restRotation.clone().multiply(additive).normalize();
+  bone.quaternion.slerp(target, dampAlpha(delta, timeConstant)).normalize();
 }
 
 type NormalizedBonePose = {

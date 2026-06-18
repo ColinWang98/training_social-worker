@@ -7,12 +7,13 @@ import {
   EvidenceSummary,
   MotionCue,
   PostSessionSupervisorReport,
+  ResponseLanguage,
   RetrievalOptions,
   SimulationMethod,
   TrainingViewMode,
 } from '../lib/interviewTypes';
-import { motionCuePrompts } from '../lib/avatarConfig';
 import type { AvatarBlendshapeDebug, AvatarMotionDebug } from '../App';
+import { caseDisplay, motionPrompt, observableLabel, t } from '../lib/i18n';
 
 type CasePanelProps = {
   caseProfile: CaseProfile;
@@ -42,6 +43,7 @@ type CasePanelProps = {
   onSimulationMethodChange: (method: SimulationMethod) => void;
   onRetrievalOptionsChange: (options: RetrievalOptions) => void;
   onVrmaFile: (file: File | null) => void;
+  uiLanguage: ResponseLanguage;
 };
 
 export function CasePanel({
@@ -72,6 +74,7 @@ export function CasePanel({
   onSimulationMethodChange,
   onRetrievalOptionsChange,
   onVrmaFile,
+  uiLanguage,
 }: CasePanelProps) {
   const state = caseProfile.psychologicalState;
   const knownFacts = getKnownFacts(caseProfile);
@@ -99,52 +102,52 @@ export function CasePanel({
   }, [isReportDialogOpen]);
 
   return (
-    <aside className="casePanel" aria-label="個案狀態及督導">
+    <aside className="casePanel" aria-label={t(uiLanguage, 'panelAria')}>
       <section className="sideSection modeSection">
         <div className="sectionTitle">
           {isInstructor ? <Eye size={16} /> : <EyeOff size={16} />}
-          <h2>顯示模式</h2>
+          <h2>{t(uiLanguage, 'displayMode')}</h2>
         </div>
-        <div className="modeSwitch" role="group" aria-label="訓練顯示模式">
+        <div className="modeSwitch" role="group" aria-label={t(uiLanguage, 'displayMode')}>
           <button
             className={viewMode === 'trainee' ? 'active' : ''}
             type="button"
             onClick={() => setViewMode('trainee')}
           >
-            學生社工
+            {t(uiLanguage, 'traineeMode')}
           </button>
           <button
             className={viewMode === 'instructor' ? 'active' : ''}
             type="button"
             onClick={() => setViewMode('instructor')}
           >
-            督導/研究者
+            {t(uiLanguage, 'instructorMode')}
           </button>
         </div>
         <p className="mutedText">
           {isInstructor
-            ? '完整個案、證據與調試資訊只供督導、研究者或本地測試使用。'
-            : '訓練視圖只顯示轉介摘要和訪談中自然出現的資訊。'}
+            ? t(uiLanguage, 'instructorModeHint')
+            : t(uiLanguage, 'traineeModeHint')}
         </p>
       </section>
 
       <section className="sideSection">
         <div className="sectionTitle">
           <Activity size={16} />
-          <h2>個案狀態</h2>
+          <h2>{t(uiLanguage, 'caseState')}</h2>
         </div>
         <label className="caseSelector">
-          <span>問題類型</span>
+          <span>{t(uiLanguage, 'issueType')}</span>
           <select value={caseProfile.id} onChange={(event) => onCaseChange(event.target.value)}>
             {caseProfiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
-                {profile.issueLabel}
+                {caseDisplay(profile, uiLanguage).issueLabel}
               </option>
             ))}
           </select>
         </label>
-        <h3 className="localizedTitle">{caseProfile.localizedTitle}</h3>
-        <p className="caseIntro">{caseProfile.client.presentingContext}</p>
+        <h3 className="localizedTitle">{caseDisplay(caseProfile, uiLanguage).title}</h3>
+        <p className="caseIntro">{caseDisplay(caseProfile, uiLanguage).context}</p>
         {isInstructor ? (
           <>
             <div className="caseMeta">
@@ -164,9 +167,9 @@ export function CasePanel({
           </>
         ) : (
           <div className="observableState">
-            <span>可觀察狀態</span>
-            <strong>{observableStateLabel(caseProfile, avatarDirective)}</strong>
-            <p>{observableStateHint(caseProfile, motionCue)}</p>
+            <span>{t(uiLanguage, 'observableState')}</span>
+            <strong>{observableStateLabel(caseProfile, avatarDirective, uiLanguage)}</strong>
+            <p>{observableStateHint(caseProfile, motionCue, uiLanguage)}</p>
           </div>
         )}
       </section>
@@ -299,10 +302,10 @@ export function CasePanel({
       <section className="sideSection">
         <div className="sectionTitle">
           <Sparkles size={16} />
-          <h2>督導評估</h2>
+          <h2>{t(uiLanguage, 'supervision')}</h2>
         </div>
         <p className="mutedText">
-          訪談進行中不顯示完整督導回饋；系統只在背景記錄過程，完整評估會於結束訪談後生成。
+          {t(uiLanguage, 'supervisionDuring')}
         </p>
         {safetyHint && (
           <div className="riskHint">
@@ -323,27 +326,27 @@ export function CasePanel({
           }}
         >
           <CheckCircle2 size={16} />
-          {isFinalReviewPending ? '正在生成督導報告' : postSessionReport ? '查看完整督導報告' : '結束訪談並生成報告'}
+          {isFinalReviewPending ? t(uiLanguage, 'generatingReport') : postSessionReport ? t(uiLanguage, 'viewReport') : t(uiLanguage, 'endSession')}
         </button>
         {postSessionReport ? (
           <div className="reportSummaryCard">
-            <strong>督導報告已生成</strong>
+            <strong>{t(uiLanguage, 'reportReady')}</strong>
             <p>{postSessionReport.overallSummary}</p>
           </div>
         ) : (
-          <p className="mutedText">完成練習後按「結束訪談」，系統會基於整場 transcript、風險探索、透露節奏和關係變化生成報告。</p>
+          <p className="mutedText">{t(uiLanguage, 'endSessionHint')}</p>
         )}
       </section>
 
       <section className="sideSection">
-        <h2>已透露資訊</h2>
+        <h2>{t(uiLanguage, 'revealedInfo')}</h2>
         {isInstructor && (
           <p className="mutedText">
-            已知 {knownFacts.length} / 未透露 {unrevealedFacts.length}
+            {t(uiLanguage, 'knownUnknownCount', { known: knownFacts.length, unknown: unrevealedFacts.length })}
           </p>
         )}
         {!isInstructor && knownFacts.length === 0 && (
-          <p className="mutedText">暫時未在訪談中透露具體背景。</p>
+          <p className="mutedText">{t(uiLanguage, 'noRevealedFacts')}</p>
         )}
         <div className="factList">
           {knownFacts.map((fact) => (
@@ -464,8 +467,8 @@ export function CasePanel({
           />
 
           <section className="sideSection">
-            <h2>Avatar 動作</h2>
-            <p className="motionCue">{motionCuePrompts[motionCue]}</p>
+            <h2>{uiLanguage === 'english' ? 'Avatar Motion' : 'Avatar 動作'}</h2>
+            <p className="motionCue">{motionPrompt(uiLanguage, motionCue)}</p>
             {avatarBlendshapeDebug && (
               <div className="realismBox" aria-label="Blendshape debug">
                 <h3>Blendshape Debug</h3>
@@ -499,6 +502,8 @@ export function CasePanel({
                   <DirectiveItem label="Keyframes" value={`${avatarMotionDebug.keyframeCount}`} />
                   <DirectiveItem label="Duration" value={`${avatarMotionDebug.durationMs}ms`} />
                   <DirectiveItem label="Family" value={avatarMotionDebug.reactionFamily} />
+                  <DirectiveItem label="Idle Mix" value={avatarMotionDebug.idleMixOnly ? 'on' : 'off'} />
+                  <DirectiveItem label="Idle Accent" value={avatarMotionDebug.idleAccentFamily} />
                   <DirectiveItem label="Reaction" value={`${Math.round(avatarMotionDebug.reactionWeight * 100)}%`} />
                   <DirectiveItem label="Bridge" value={`${Math.round(avatarMotionDebug.bridgeProgress * 100)}%`} />
                   <DirectiveItem label="坐姿安全" value={avatarMotionDebug.seatedSafety} />
@@ -516,7 +521,7 @@ export function CasePanel({
                   <DirectiveItem label="整體" value={`${realismAssessment.realismScore.toFixed(1)}/10`} />
                   <DirectiveItem label="連續性" value={`${realismAssessment.consistencyScore.toFixed(1)}/10`} />
                   <DirectiveItem label="透露適配" value={`${realismAssessment.disclosureFitScore.toFixed(1)}/10`} />
-                  <DirectiveItem label="粵語自然度" value={`${realismAssessment.languageNaturalnessScore.toFixed(1)}/10`} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Language naturalness' : '語言自然度'} value={`${realismAssessment.languageNaturalnessScore.toFixed(1)}/10`} />
                 </div>
                 {realismAssessment.repairApplied && (
                   <p className="overrideNote">已校準：{realismAssessment.repairReason ?? '回應真實度不足'}</p>
@@ -567,7 +572,7 @@ export function CasePanel({
                 />
               </>
             ) : (
-              <p className="mutedText">服務對象回應後，這裡會顯示 ADK 輸出的表演指令。</p>
+              <p className="mutedText">{uiLanguage === 'english' ? 'After the client responds, ADK avatar directives will appear here.' : '服務對象回應後，這裡會顯示 ADK 輸出的表演指令。'}</p>
             )}
             {safetyFlags.length > 0 && (
               <div className="safetyFlagRow">
@@ -599,14 +604,14 @@ export function CasePanel({
           >
             <header className="reportDialogHeader">
               <div>
-                <h2 id="post-session-report-title">完整督導報告</h2>
-                <p>訪談後評估，以香港社工實務能力參考框架整理。</p>
+                <h2 id="post-session-report-title">{t(uiLanguage, 'fullReport')}</h2>
+                <p>{t(uiLanguage, 'fullReportSubtitle')}</p>
               </div>
-              <button aria-label="關閉督導報告" className="iconButton" type="button" onClick={() => setIsReportDialogOpen(false)}>
+              <button aria-label={t(uiLanguage, 'closeReport')} className="iconButton" type="button" onClick={() => setIsReportDialogOpen(false)}>
                 <X size={18} />
               </button>
             </header>
-            <PostSessionReportView report={postSessionReport} detailed={isInstructor} />
+            <PostSessionReportView report={postSessionReport} detailed={isInstructor} uiLanguage={uiLanguage} />
           </section>
         </div>
       )}
@@ -617,53 +622,55 @@ export function CasePanel({
 function observableStateLabel(
   caseProfile: CaseProfile,
   avatarDirective: ClientResponse['avatarDirective'] | null,
+  uiLanguage: ResponseLanguage,
 ) {
   const affect = avatarDirective?.affect ?? caseProfile.psychologicalState.emotion;
-  if (affect.includes('defensive')) return '防衛、保持距離';
-  if (affect.includes('withdrawn')) return '退縮、少說話';
-  if (affect.includes('anxious')) return '緊張、不安';
-  if (affect.includes('ashamed')) return '羞恥、低頭迴避';
-  if (affect.includes('irritated')) return '被冒犯、抗拒';
-  if (affect.includes('sad')) return '低落、無力';
-  if (affect.includes('reflective')) return '稍為願意思考';
-  return '觀望、未完全投入';
+  return observableLabel(uiLanguage, affect);
 }
 
-function observableStateHint(caseProfile: CaseProfile, motionCue: MotionCue) {
-  if (motionCue !== 'neutral') return motionCuePrompts[motionCue];
+function observableStateHint(caseProfile: CaseProfile, motionCue: MotionCue, uiLanguage: ResponseLanguage) {
+  if (motionCue !== 'neutral') return motionPrompt(uiLanguage, motionCue);
   if (caseProfile.hiddenFacts.some((fact) => fact.disclosed)) {
-    return '已開始透露部分背景，但仍需要以開放式和同理方式跟進。';
+    return t(uiLanguage, 'observableWithFacts');
   }
-  return '目前只能根據轉介摘要和對話反應探索。';
+  return t(uiLanguage, 'observableNoFacts');
 }
 
-function PostSessionReportView({ report, detailed }: { report: PostSessionSupervisorReport; detailed: boolean }) {
+function PostSessionReportView({
+  report,
+  detailed,
+  uiLanguage,
+}: {
+  report: PostSessionSupervisorReport;
+  detailed: boolean;
+  uiLanguage: ResponseLanguage;
+}) {
   return (
     <div className="postSessionReport">
       <div className="reportBlock">
-        <h3>總體表現</h3>
+        <h3>{t(uiLanguage, 'overallPerformance')}</h3>
         <p>{report.overallSummary}</p>
       </div>
       {!report.hkPcfAssessment && (
         <RadarScoreChart
           labels={competencyLabels}
           scores={report.competencyScores}
-          title="督導能力雷達圖"
+          title={uiLanguage === 'english' ? 'Supervision competency radar' : '督導能力雷達圖'}
         />
       )}
       <div className="scoreGrid">
         {Object.entries(report.competencyScores).map(([label, value]) => (
-          <Metric key={label} label={competencyLabels[label] ?? label} value={value} max={10} />
+          <Metric key={label} label={competencyLabel(label, uiLanguage)} value={value} max={10} />
         ))}
       </div>
-      {report.hkPcfAssessment && <HkPcfAssessmentView assessment={report.hkPcfAssessment} detailed={detailed} />}
-      <TurningPointList items={report.processReview.turningPoints} detailed={detailed} />
-      <FeedbackList title="有效做法" items={report.processReview.effectiveMoments} />
-      <FeedbackList title="錯過機會" items={report.processReview.missedOpportunities} />
-      <FeedbackList title="個案特定框架" items={report.caseSpecificFeedback.frameworkUsed} />
-      <FeedbackList title="已達成學習目標" items={report.caseSpecificFeedback.learningObjectivesMet} />
-      <FeedbackList title="仍需練習目標" items={report.caseSpecificFeedback.learningObjectivesNotMet} />
-      <FeedbackList title="下一次練習建議" items={report.suggestedPracticeGoals} />
+      {report.hkPcfAssessment && <HkPcfAssessmentView assessment={report.hkPcfAssessment} detailed={detailed} uiLanguage={uiLanguage} />}
+      <TurningPointList items={report.processReview.turningPoints} detailed={detailed} uiLanguage={uiLanguage} />
+      <FeedbackList title={t(uiLanguage, 'effectiveMoments')} items={report.processReview.effectiveMoments} />
+      <FeedbackList title={t(uiLanguage, 'missedOpportunities')} items={report.processReview.missedOpportunities} />
+      <FeedbackList title={t(uiLanguage, 'caseFramework')} items={report.caseSpecificFeedback.frameworkUsed} />
+      <FeedbackList title={t(uiLanguage, 'objectivesMet')} items={report.caseSpecificFeedback.learningObjectivesMet} />
+      <FeedbackList title={t(uiLanguage, 'objectivesNotMet')} items={report.caseSpecificFeedback.learningObjectivesNotMet} />
+      <FeedbackList title={t(uiLanguage, 'practiceGoals')} items={report.suggestedPracticeGoals} />
     </div>
   );
 }
@@ -671,31 +678,33 @@ function PostSessionReportView({ report, detailed }: { report: PostSessionSuperv
 function HkPcfAssessmentView({
   assessment,
   detailed,
+  uiLanguage,
 }: {
   assessment: NonNullable<PostSessionSupervisorReport['hkPcfAssessment']>;
   detailed: boolean;
+  uiLanguage: ResponseLanguage;
 }) {
   return (
     <div className="hkPcfBlock">
       <div className="reportBlock">
-        <h3>香港社工實務能力參考</h3>
+        <h3>{t(uiLanguage, 'hkPcf')}</h3>
         <p>{assessment.frameworkLabel}</p>
         <p className="disclaimerText">{assessment.disclaimer}</p>
       </div>
-      <RadarScoreChart labels={hkPcfLabels} scores={assessment.scores} title="HK PCF 能力雷達圖" />
+      <RadarScoreChart labels={hkPcfLabelsFor(uiLanguage)} scores={assessment.scores} title={t(uiLanguage, 'hkPcfRadar')} />
       <div className="scoreGrid">
         {Object.entries(assessment.scores).map(([label, value]) => (
-          <Metric key={label} label={hkPcfLabels[label] ?? label} value={value} max={10} />
+          <Metric key={label} label={hkPcfLabel(label, uiLanguage)} value={value} max={10} />
         ))}
       </div>
-      <FeedbackList title="能力證據：有效表現" items={assessment.evidence.strengths} />
-      <FeedbackList title="能力證據：需留意" items={assessment.evidence.concerns} />
-      <FeedbackList title="關鍵片段" items={assessment.evidence.turningPoints} />
-      <FeedbackList title="錯過機會" items={assessment.evidence.missedOpportunities} />
-      <FeedbackList title="具體練習建議" items={assessment.practiceRecommendations} />
+      <FeedbackList title={t(uiLanguage, 'strengthEvidence')} items={assessment.evidence.strengths} />
+      <FeedbackList title={t(uiLanguage, 'concernEvidence')} items={assessment.evidence.concerns} />
+      <FeedbackList title={t(uiLanguage, 'turningPoints')} items={assessment.evidence.turningPoints} />
+      <FeedbackList title={t(uiLanguage, 'missedOpportunities')} items={assessment.evidence.missedOpportunities} />
+      <FeedbackList title={t(uiLanguage, 'practiceRecommendations')} items={assessment.practiceRecommendations} />
       {assessment.personInEnvironmentAssessment && (
         <div className="reportBlock">
-          <h3>人在情境評估</h3>
+          <h3>{t(uiLanguage, 'pieAssessment')}</h3>
           <p>{assessment.personInEnvironmentAssessment.summary}</p>
         </div>
       )}
@@ -708,10 +717,10 @@ function HkPcfAssessmentView({
       )}
       {detailed && (
         <>
-          <FeedbackList title="框架依據" items={assessment.frameworkBasis} />
+          <FeedbackList title={t(uiLanguage, 'frameworkBasis')} items={assessment.frameworkBasis} />
           <div className="reportBlock">
-            <h3>督導/研究者提示</h3>
-            <p>此區只顯示評估框架與 trace evidence 摘要；正式訓練視圖不提前展示未透露個案資料。</p>
+            <h3>{t(uiLanguage, 'instructorNote')}</h3>
+            <p>{t(uiLanguage, 'instructorNoteBody')}</p>
           </div>
         </>
       )}
@@ -722,20 +731,22 @@ function HkPcfAssessmentView({
 function TurningPointList({
   items,
   detailed,
+  uiLanguage,
 }: {
   items: PostSessionSupervisorReport['processReview']['turningPoints'];
   detailed: boolean;
+  uiLanguage: ResponseLanguage;
 }) {
   if (!items.length) return null;
   return (
     <div className="feedbackList">
-      <h3>關鍵片段回顧</h3>
+      <h3>{t(uiLanguage, 'turningPointReview')}</h3>
       {items.map((item) => (
         <div className="turningPoint" key={`${item.turnId}-${item.whatHappened}`}>
           <strong>{item.turnId}</strong>
           <p>{item.whatHappened}</p>
           <p>{item.whyItMattered}</p>
-          {detailed && item.betterAlternative && <p>可替代做法：{item.betterAlternative}</p>}
+          {detailed && item.betterAlternative && <p>{t(uiLanguage, 'alternativeMove')}：{item.betterAlternative}</p>}
         </div>
       ))}
     </div>
@@ -947,6 +958,18 @@ const competencyLabels: Record<string, string> = {
   nextStepPlanning: '下一步計劃',
 };
 
+const competencyLabelsEn: Record<string, string> = {
+  engagement: 'Engagement',
+  assessment: 'Assessment',
+  empathyAndAttunement: 'Empathy',
+  personInEnvironment: 'PIE',
+  strengthsPerspective: 'Strengths',
+  riskAndSafety: 'Risk and safety',
+  ethicsAndBoundaries: 'Ethics',
+  culturalHumility: 'Cultural humility',
+  nextStepPlanning: 'Next steps',
+};
+
 const hkPcfLabels: Record<string, string> = {
   engagementAndRelationship: '建立關係與投入',
   assessmentAndInformationGathering: '資料收集與評估',
@@ -958,6 +981,30 @@ const hkPcfLabels: Record<string, string> = {
   interventionPlanningAndReferral: '介入計劃與轉介',
   professionalReflectionAndUseOfSupervision: '專業反思與督導運用',
 };
+
+const hkPcfLabelsEn: Record<string, string> = {
+  engagementAndRelationship: 'Engagement and relationship',
+  assessmentAndInformationGathering: 'Assessment and information gathering',
+  personInEnvironmentAndHongKongContext: 'Person-in-environment and Hong Kong context',
+  ethicsConfidentialityAndBoundaries: 'Ethics, confidentiality, and boundaries',
+  selfDeterminationAndInformedChoice: 'Self-determination and informed choice',
+  diversityAntiDiscriminationAndCulturalSensitivity: 'Diversity, anti-discrimination, and cultural sensitivity',
+  riskSafetyAndSafeguarding: 'Risk, safety, and safeguarding',
+  interventionPlanningAndReferral: 'Intervention planning and referral',
+  professionalReflectionAndUseOfSupervision: 'Professional reflection and use of supervision',
+};
+
+function competencyLabel(key: string, language: ResponseLanguage) {
+  return (language === 'english' ? competencyLabelsEn : competencyLabels)[key] ?? key;
+}
+
+function hkPcfLabelsFor(language: ResponseLanguage) {
+  return language === 'english' ? hkPcfLabelsEn : hkPcfLabels;
+}
+
+function hkPcfLabel(key: string, language: ResponseLanguage) {
+  return hkPcfLabelsFor(language)[key] ?? key;
+}
 
 const simulationMethodOptions: Array<{ value: SimulationMethod; label: string; description: string }> = [
   {

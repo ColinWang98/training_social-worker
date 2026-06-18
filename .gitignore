@@ -16,6 +16,7 @@ data/profiles/
 data/evaluations/
 data/adk/
 .venv-adk/
+.local-tools/
 adk_service/.env
 __pycache__/
 *.pyc

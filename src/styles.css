@@ -52,10 +52,8 @@ button {
 }
 
 .appHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  gap: 10px;
   padding: 2px 2px 12px;
 }
 
@@ -77,23 +75,25 @@ button {
 
 .headerMeta {
   display: grid;
-  gap: 4px;
-  min-width: 118px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
   color: #596375;
   font-size: 0.72rem;
   font-weight: 680;
-  text-align: right;
+  text-align: left;
 }
 
-.headerMeta label {
+.headerMeta label,
+.headerControlLabel {
   color: #7a8494;
   font-size: 0.68rem;
   text-transform: uppercase;
 }
 
 .headerMeta select {
-  min-width: 148px;
-  justify-self: end;
+  width: 100%;
+  min-width: 0;
   border: 1px solid #cfd6df;
   border-radius: 6px;
   background: #fff;
@@ -104,8 +104,27 @@ button {
   padding: 6px 26px 6px 8px;
 }
 
+.headerControl {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.headerControl span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
 .shutdownButton {
-  justify-self: end;
+  flex: 1 1 94px;
   border: 1px solid #d9a2a2;
   border-radius: 6px;
   background: #fff6f6;
@@ -121,7 +140,7 @@ button {
 }
 
 .headerSecondaryButton {
-  justify-self: end;
+  flex: 1 1 112px;
   border: 1px solid #c8d3dc;
   border-radius: 6px;
   background: #ffffff;
@@ -622,13 +641,15 @@ button {
 }
 
 .voiceStatus.listening,
-.voiceStatus.transcribing {
+.voiceStatus.user_speaking,
+.voiceStatus.interrupted {
   color: #245237;
   background: #e8f4eb;
 }
 
-.voiceStatus.speaking,
-.voiceStatus.generating {
+.voiceStatus.avatar_speaking,
+.voiceStatus.generating,
+.voiceStatus.committing {
   color: #5d451c;
   background: #f5eedf;
 }
@@ -801,6 +822,19 @@ button {
   border-color: #315f72;
   color: #ffffff;
   background: #315f72;
+}
+
+.compactModeSwitch {
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 0;
+  gap: 4px;
+}
+
+.compactModeSwitch button {
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.72rem;
 }
 
 .observableState {

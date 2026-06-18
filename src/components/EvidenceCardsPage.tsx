@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Search } from 'lucide-react';
-import { EvidenceCard } from '../lib/interviewTypes';
+import { EvidenceCard, ResponseLanguage } from '../lib/interviewTypes';
 import { EvidenceCardListRequest, listEvidenceCards } from '../lib/apiClient';
 
 const pageSize = 50;
@@ -23,9 +23,10 @@ const affectOptions = ['neutral', 'defensive', 'ashamed', 'anxious', 'reflective
 
 type EvidenceCardsPageProps = {
   onBack: () => void;
+  uiLanguage: ResponseLanguage;
 };
 
-export function EvidenceCardsPage({ onBack }: EvidenceCardsPageProps) {
+export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps) {
   const [cards, setCards] = useState<EvidenceCard[]>([]);
   const [total, setTotal] = useState(0);
   const [backend, setBackend] = useState('loading');
@@ -110,10 +111,10 @@ export function EvidenceCardsPage({ onBack }: EvidenceCardsPageProps) {
         <div>
           <button className="backButton" type="button" onClick={onBack}>
             <ArrowLeft size={16} />
-            返回訓練頁
+            {uiLanguage === 'english' ? 'Back to training' : '返回訓練頁'}
           </button>
-          <h1>Evidence Cards 查看器</h1>
-          <p>只顯示 normalized evidence cards；不讀取 SQLite raw rows，也不顯示原始私有 JSON。</p>
+          <h1>{uiLanguage === 'english' ? 'Evidence Cards Browser' : 'Evidence Cards 查看器'}</h1>
+          <p>{uiLanguage === 'english' ? 'Shows normalized evidence cards only; raw SQLite rows and private JSON are not displayed.' : '只顯示 normalized evidence cards；不讀取 SQLite raw rows，也不顯示原始私有 JSON。'}</p>
         </div>
         <div className="evidenceStats">
           <span>Backend</span>
@@ -125,69 +126,69 @@ export function EvidenceCardsPage({ onBack }: EvidenceCardsPageProps) {
 
       <form className="evidenceFilters" onSubmit={handleFilterSubmit}>
         <label>
-          搜尋
+          {uiLanguage === 'english' ? 'Search' : '搜尋'}
           <input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="client text / source / tag" />
         </label>
         <label>
-          標籤
+          {uiLanguage === 'english' ? 'Tag' : '標籤'}
           <input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="bullying, alcohol, anxiety..." />
         </label>
         <label>
           Source
           <select value={source} onChange={(event) => { setOffset(0); setSource(event.target.value); }}>
-            <option value="">全部</option>
+            <option value="">{uiLanguage === 'english' ? 'All' : '全部'}</option>
             {sourceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label>
           Quality
           <select value={quality} onChange={(event) => { setOffset(0); setQuality(event.target.value); }}>
-            <option value="">全部</option>
+            <option value="">{uiLanguage === 'english' ? 'All' : '全部'}</option>
             {qualityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label>
           Client group
           <select value={clientGroup} onChange={(event) => { setOffset(0); setClientGroup(event.target.value); }}>
-            <option value="">全部</option>
+            <option value="">{uiLanguage === 'english' ? 'All' : '全部'}</option>
             {clientGroupOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <label>
           Affect
           <select value={affect} onChange={(event) => { setOffset(0); setAffect(event.target.value); }}>
-            <option value="">全部</option>
+            <option value="">{uiLanguage === 'english' ? 'All' : '全部'}</option>
             {affectOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
         <div className="evidenceFilterActions">
           <button type="submit">
             <Search size={15} />
-            套用
+            {uiLanguage === 'english' ? 'Apply' : '套用'}
           </button>
-          <button className="secondaryButton" type="button" onClick={resetFilters}>重置</button>
+          <button className="secondaryButton" type="button" onClick={resetFilters}>{uiLanguage === 'english' ? 'Reset' : '重置'}</button>
         </div>
       </form>
 
       <section className="evidenceToolbar" aria-label="Evidence card pagination">
-        <span>{isLoading ? '載入中...' : `顯示 ${pageStart}-${pageEnd} / ${total.toLocaleString()}`}</span>
+        <span>{isLoading ? (uiLanguage === 'english' ? 'Loading...' : '載入中...') : uiLanguage === 'english' ? `Showing ${pageStart}-${pageEnd} / ${total.toLocaleString()}` : `顯示 ${pageStart}-${pageEnd} / ${total.toLocaleString()}`}</span>
         <div>
-          <button type="button" disabled={!canGoBack || isLoading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一頁</button>
-          <button type="button" disabled={!canGoForward || isLoading} onClick={() => setOffset(offset + pageSize)}>下一頁</button>
+          <button type="button" disabled={!canGoBack || isLoading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>{uiLanguage === 'english' ? 'Previous' : '上一頁'}</button>
+          <button type="button" disabled={!canGoForward || isLoading} onClick={() => setOffset(offset + pageSize)}>{uiLanguage === 'english' ? 'Next' : '下一頁'}</button>
         </div>
       </section>
 
       {errorMessage ? <div className="evidenceError">{errorMessage}</div> : null}
 
       <section className="evidenceCardList" aria-label="Evidence cards">
-        {cards.map((card) => <EvidenceCardItem card={card} key={card.id} />)}
-        {!isLoading && cards.length === 0 && !errorMessage ? <div className="emptyEvidenceState">沒有符合條件的 evidence cards。</div> : null}
+        {cards.map((card) => <EvidenceCardItem card={card} key={card.id} uiLanguage={uiLanguage} />)}
+        {!isLoading && cards.length === 0 && !errorMessage ? <div className="emptyEvidenceState">{uiLanguage === 'english' ? 'No evidence cards match the filters.' : '沒有符合條件的 evidence cards。'}</div> : null}
       </section>
     </main>
   );
 }
 
-function EvidenceCardItem({ card }: { card: EvidenceCard }) {
+function EvidenceCardItem({ card, uiLanguage }: { card: EvidenceCard; uiLanguage: ResponseLanguage }) {
   return (
     <article className="evidenceCardItem">
       <header>
@@ -202,9 +203,9 @@ function EvidenceCardItem({ card }: { card: EvidenceCard }) {
         </div>
       </header>
       <p className="evidenceUtterance">{card.clientUtterance}</p>
-      {card.workerMove ? <p className="evidenceWorkerMove">Worker move: {card.workerMove}</p> : null}
-      <TagLine label="Issue tags" values={card.issueTags} />
-      <TagLine label="Risk signals" values={card.riskSignals} />
+      {card.workerMove ? <p className="evidenceWorkerMove">{uiLanguage === 'english' ? 'Worker move' : '社工話術'}: {card.workerMove}</p> : null}
+      <TagLine label={uiLanguage === 'english' ? 'Issue tags' : '議題標籤'} values={card.issueTags} />
+      <TagLine label={uiLanguage === 'english' ? 'Risk signals' : '風險標籤'} values={card.riskSignals} />
       <TagLine label="Change talk" values={card.changeTalk ?? []} />
       <TagLine label="Review flags" values={card.reviewFlags ?? []} />
       <footer>

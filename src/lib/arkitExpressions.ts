@@ -1,7 +1,7 @@
-import { AffectLabel } from './interviewTypes';
+import { AffectLabel, LipSyncTimeline, MouthViseme } from './interviewTypes';
 import { ArkitBlendshapeWeights, ExpressionWeights } from './avatarConfig';
 
-export type CantoneseViseme = 'closed' | 'open' | 'rounded' | 'front' | 'soft';
+export type CantoneseViseme = MouthViseme;
 
 export type CantoneseVisemeFrame = {
   atMs: number;
@@ -41,6 +41,18 @@ export function buildCantoneseVisemeTimeline(text: string, durationMs: number): 
     cursor += frameDuration;
     return frame;
   });
+}
+
+export function buildRhubarbVisemeTimeline(lipSync: LipSyncTimeline | undefined): CantoneseVisemeFrame[] {
+  if (!lipSync?.mappedVisemes?.length) return [];
+  return lipSync.mappedVisemes
+    .filter((cue) => Number.isFinite(cue.startMs) && Number.isFinite(cue.endMs) && cue.endMs > cue.startMs)
+    .map((cue) => ({
+      atMs: cue.startMs,
+      durationMs: cue.endMs - cue.startMs,
+      viseme: cue.viseme,
+      char: '',
+    }));
 }
 
 export function estimateCantoneseSpeechDuration(text: string) {
@@ -178,6 +190,10 @@ const profileMap: Record<string, ArkitBlendshapeWeights> = {
 };
 
 const visemeWeightMap: Record<CantoneseViseme, ArkitBlendshapeWeights> = {
+  rest: {
+    mouthClose: 0.18,
+    jawOpen: 0.01,
+  },
   closed: {
     mouthClose: 0.5,
     jawOpen: 0.02,
@@ -202,5 +218,19 @@ const visemeWeightMap: Record<CantoneseViseme, ArkitBlendshapeWeights> = {
   soft: {
     jawOpen: 0.28,
     mouthClose: 0.08,
+  },
+  wide: {
+    jawOpen: 0.72,
+    mouthLowerDownLeft: 0.26,
+    mouthLowerDownRight: 0.26,
+    mouthUpperUpLeft: 0.14,
+    mouthUpperUpRight: 0.14,
+  },
+  fv: {
+    jawOpen: 0.12,
+    mouthPressLeft: 0.24,
+    mouthPressRight: 0.24,
+    mouthLowerDownLeft: 0.12,
+    mouthLowerDownRight: 0.12,
   },
 };

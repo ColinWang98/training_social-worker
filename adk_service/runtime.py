@@ -6,8 +6,11 @@ import json
 import os
 import queue
 import re
+import shutil
 import sqlite3
 import struct
+import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -54,6 +57,17 @@ ALLOWED_AFFECTS = {
     "sad",
 }
 ALLOWED_MOTIONS = {"neutral", "look_down", "avoid_eye_contact", "rub_hands", "lean_back", "slow_nod"}
+RHUBARB_SHAPE_TO_VISEME = {
+    "A": "closed",
+    "B": "soft",
+    "C": "open",
+    "D": "wide",
+    "E": "rounded",
+    "F": "rounded",
+    "G": "fv",
+    "H": "front",
+    "X": "rest",
+}
 NUMERIC_STATE_KEYS = [
     "distressLevel",
     "stressLevel",
@@ -1705,7 +1719,7 @@ class ClientSimulationAgent(ManagedAgent):
     def __init__(self, llm: DeepSeekClient) -> None:
         super().__init__(
             "ClientSimulationAgent",
-            "Generate structured Cantonese service-user responses for social-work interview training.",
+            "Generate structured service-user responses for social-work interview training.",
             f"deepseek/{os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')}",
         )
         self.llm = llm
@@ -1735,7 +1749,7 @@ class SafetyReviewAgent(ManagedAgent):
             False,
         )
 
-    def run(self, response: dict[str, Any], case_profile: dict[str, Any]) -> dict[str, Any]:
+    def run(self, response: dict[str, Any], case_profile: dict[str, Any], response_language: str = "cantonese") -> dict[str, Any]:
         text = response.get("clientText", "")
         flags = []
 
@@ -1761,7 +1775,7 @@ class SafetyReviewAgent(ManagedAgent):
 
         repaired = dict(response)
         if flags:
-            repaired["clientText"] = safe_repair_text(case_profile, response)
+            repaired["clientText"] = safe_repair_text(case_profile, response, response_language)
             repaired["riskSignals"] = unique_strings([*response.get("riskSignals", []), "safety_review_repaired"])
             repaired["motionCue"] = "look_down"
             repaired["affect"] = "withdrawn"
@@ -1827,7 +1841,7 @@ class ClientRealismScoringAgent(ManagedAgent):
         if assessment.get("underReactionRisk"):
             reasons.append("情緒反應不足")
         if assessment.get("languageNaturalnessScore", 10) < 6.5:
-            reasons.append("粵語自然度不足")
+            reasons.append("語言自然度不足")
         if assessment.get("consistencyScore", 10) < 5.5:
             reasons.append("個案連續性不足")
         if assessment.get("repeatedResponseRisk"):
@@ -1946,14 +1960,117 @@ class PostSessionSupervisorAgent(ManagedAgent):
         return parsed
 
 
+class RhubarbLipSyncService:
+    def __init__(self) -> None:
+        self.recognizer = os.environ.get("RHUBARB_RECOGNIZER", "phonetic")
+
+    @property
+    def enabled(self) -> bool:
+        return os.environ.get("LOCAL_RHUBARB_LIPSYNC_ENABLED", "").lower() == "true"
+
+    @property
+    def binary_path(self) -> str | None:
+        configured = os.environ.get("RHUBARB_BIN", "").strip()
+        if configured:
+            return configured if Path(configured).exists() else None
+        return shutil.which("rhubarb")
+
+    @property
+    def available(self) -> bool:
+        return bool(self.binary_path)
+
+    @property
+    def can_run(self) -> bool:
+        return self.enabled and self.available
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "lipSyncProvider": "rhubarb" if self.enabled else None,
+            "rhubarbEnabled": self.enabled,
+            "rhubarbAvailable": self.available,
+            "rhubarbRecognizer": self.recognizer,
+        }
+
+    def fallback(self) -> dict[str, Any]:
+        return {
+            "provider": "rhubarb",
+            "recognizer": self.recognizer,
+            "cues": [],
+            "mappedVisemes": [],
+            "fallbackUsed": True,
+        }
+
+    def analyze(self, audio_content: bytes, text: str) -> dict[str, Any] | None:
+        if not self.can_run:
+            return self.fallback() if self.enabled else None
+        timeout_ms = clamp_float(os.environ.get("RHUBARB_TIMEOUT_MS", "2500"), 500, 15000)
+        binary = self.binary_path
+        if not binary:
+            return self.fallback()
+        with tempfile.TemporaryDirectory(prefix="social-work-rhubarb-") as temp_dir:
+            temp_path = Path(temp_dir)
+            audio_path = temp_path / "speech.wav"
+            dialog_path = temp_path / "dialog.txt"
+            audio_path.write_bytes(audio_content)
+            dialog_path.write_text(text, encoding="utf-8")
+            command = [
+                binary,
+                "--recognizer",
+                self.recognizer,
+                "--exportFormat",
+                "json",
+                "--dialogFile",
+                str(dialog_path),
+                str(audio_path),
+            ]
+            try:
+                completed = subprocess.run(
+                    command,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_ms / 1000,
+                )
+                parsed = json.loads(completed.stdout or "{}")
+                return self._normalize(parsed)
+            except Exception:
+                return self.fallback()
+
+    def _normalize(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        cues: list[dict[str, Any]] = []
+        for item in parsed.get("mouthCues", []):
+            shape = item.get("value")
+            if shape not in RHUBARB_SHAPE_TO_VISEME:
+                continue
+            start = float(item.get("start", 0)) * 1000
+            end = float(item.get("end", 0)) * 1000
+            if end <= start:
+                continue
+            cues.append({"startMs": round(start), "endMs": round(end), "shape": shape})
+        return {
+            "provider": "rhubarb",
+            "recognizer": self.recognizer,
+            "cues": cues,
+            "mappedVisemes": [
+                {
+                    "startMs": cue["startMs"],
+                    "endMs": cue["endMs"],
+                    "viseme": RHUBARB_SHAPE_TO_VISEME[cue["shape"]],
+                }
+                for cue in cues
+            ],
+        }
+
+
 class VoiceSynthesisAgent(ManagedAgent):
     def __init__(self) -> None:
         super().__init__(
             "VoiceSynthesisAgent",
-            "Synthesize service-user Cantonese speech with Google Text-to-Speech.",
+            "Synthesize service-user speech with Google Text-to-Speech.",
             os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Chirp3-HD-Achird"),
             False,
         )
+        self.lip_sync = RhubarbLipSyncService()
 
     @property
     def enabled(self) -> bool:
@@ -1973,36 +2090,67 @@ class VoiceSynthesisAgent(ManagedAgent):
         except Exception as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("google-cloud-texttospeech is not installed.") from exc
 
-        language = os.environ.get("GOOGLE_TTS_LANGUAGE", "yue-HK")
+        language_mode = response_language({"responseLanguage": payload.get("language") or payload.get("responseLanguage")})
+        language = (
+            os.environ.get("GOOGLE_TTS_EN_LANGUAGE", "en-US")
+            if language_mode == "english"
+            else os.environ.get("GOOGLE_TTS_LANGUAGE", "yue-HK")
+        )
         voice_override = payload.get("voice") or payload.get("voiceName")
-        voice_name = (
-            voice_override.strip()
-            if isinstance(voice_override, str) and voice_override.strip()
+        default_voice = (
+            os.environ.get("GOOGLE_TTS_EN_VOICE", "en-US-Wavenet-D")
+            if language_mode == "english"
             else os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Chirp3-HD-Achird")
         )
-        encoding_name = os.environ.get("GOOGLE_TTS_AUDIO_ENCODING", "MP3").upper()
-        encoding = getattr(texttospeech.AudioEncoding, encoding_name, texttospeech.AudioEncoding.MP3)
+        voice_name = voice_override.strip() if isinstance(voice_override, str) and voice_override.strip() else default_voice
         speaking_rate, pitch = tts_style_for_affect(payload.get("affect"), payload.get("voiceStyle"))
-        audio_config = {
-            "audio_encoding": encoding,
-            "speaking_rate": speaking_rate,
-        }
-        if os.environ.get("GOOGLE_TTS_ENABLE_PITCH", "").lower() == "true":
-            audio_config["pitch"] = pitch
 
         client = texttospeech.TextToSpeechClient()
-        response = client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=text.strip()),
-            voice=texttospeech.VoiceSelectionParams(language_code=language, name=voice_name),
-            audio_config=texttospeech.AudioConfig(**audio_config),
-        )
+        voice_params = {"language_code": language}
+        if voice_name:
+            voice_params["name"] = voice_name
+        requested_encoding_name = os.environ.get("GOOGLE_TTS_AUDIO_ENCODING", "MP3").upper()
+        encoding_name = "LINEAR16" if self.lip_sync.can_run else requested_encoding_name
+        linear16_sample_rate = int(clamp_float(os.environ.get("GOOGLE_TTS_LINEAR16_SAMPLE_RATE", "24000"), 8000, 48000))
+
+        def synthesize_with_encoding(active_encoding_name: str) -> Any:
+            encoding = getattr(texttospeech.AudioEncoding, active_encoding_name, texttospeech.AudioEncoding.MP3)
+            audio_config = {
+                "audio_encoding": encoding,
+                "speaking_rate": speaking_rate,
+            }
+            if active_encoding_name == "LINEAR16":
+                audio_config["sample_rate_hertz"] = linear16_sample_rate
+            if os.environ.get("GOOGLE_TTS_ENABLE_PITCH", "").lower() == "true":
+                audio_config["pitch"] = pitch
+            return client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=text.strip()),
+                voice=texttospeech.VoiceSelectionParams(**voice_params),
+                audio_config=texttospeech.AudioConfig(**audio_config),
+            )
+
+        try:
+            response = synthesize_with_encoding(encoding_name)
+        except Exception:
+            if encoding_name == requested_encoding_name:
+                raise
+            encoding_name = requested_encoding_name
+            response = synthesize_with_encoding(encoding_name)
+
+        audio_content = response.audio_content
+        if encoding_name == "LINEAR16":
+            audio_content = ensure_wav_container(audio_content, linear16_sample_rate)
         mime_type = "audio/mpeg" if encoding_name == "MP3" else "audio/wav"
-        return {
+        result = {
             "mimeType": mime_type,
-            "audioBase64": base64.b64encode(response.audio_content).decode("ascii"),
+            "audioBase64": base64.b64encode(audio_content).decode("ascii"),
             "provider": "google-tts",
-            "voice": voice_name,
+            "voice": voice_name or language,
         }
+        lip_sync = self.lip_sync.analyze(audio_content, text.strip())
+        if lip_sync:
+            result["lipSync"] = lip_sync
+        return result
 
 
 class StreamingSpeechSession:
@@ -2118,6 +2266,8 @@ class StreamingSpeechAgent(ManagedAgent):
                         )
             except Exception as exc:
                 emit({"type": "error", "message": str(exc), "recoverable": True})
+            finally:
+                emit({"type": "stream_ended", "recoverable": True})
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
@@ -2209,6 +2359,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "embeddingModel": embedding_stats["model"],
             "embeddingCoverage": embedding_stats["coverage"],
             "embeddingStatus": embedding_stats["status"],
+            **self.voice_synthesis.lip_sync.health(),
             "promptRegistry": {
                 "clientPrompt": bool(self.prompt_registry.client_prompt()),
                 "simulationMethods": sorted(self.strategy_service.methods.keys()),
@@ -2244,6 +2395,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         student_text = payload.get("studentText")
         if not isinstance(case_profile, dict) or not isinstance(student_text, str):
             raise ValueError("Invalid interview-turn payload.")
+        response_language_value = response_language(payload)
 
         agent_trace_id = f"trace-{uuid.uuid4().hex[:16]}"
         session_id = payload.get("sessionId") or f"case-{case_profile.get('id', 'default')}"
@@ -2291,7 +2443,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         response["evidenceSummary"] = evidence_summary
         response["simulationMethod"] = simulation_strategy["simulationMethod"]
         response["simulationStrategySnapshot"] = simulation_strategy
-        response = self.safety_reviewer.run(response, case_profile)
+        response = self.safety_reviewer.run(response, case_profile, response_language_value)
         response["riskSignals"] = unique_strings([
             *client_disclosed_risk_signals(response, case_profile.get("caseType")),
             *(["safety_review_repaired"] if "safety_review_repaired" in response.get("riskSignals", []) else []),
@@ -2377,12 +2529,17 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
                 "caseProfile": case_profile,
                 "history": history,
                 "trace": trace,
+                "responseLanguage": response_language(payload),
                 "hkPcfAssessmentSeed": hk_pcf_seed,
                 "groundingProfileSnapshot": summarize_grounding_profile(grounding_profile),
                 "pieContextSnapshot": summarize_pie_context(grounding_profile, case_profile),
             }
         )
-        report["hkPcfAssessment"] = merge_hk_pcf_assessment(report.get("hkPcfAssessment"), hk_pcf_seed)
+        report["hkPcfAssessment"] = merge_hk_pcf_assessment(
+            report.get("hkPcfAssessment"),
+            hk_pcf_seed,
+            response_language(payload),
+        )
         self.sessions.append_event(
             session_id,
             f"trace-{uuid.uuid4().hex[:16]}",
@@ -2567,12 +2724,37 @@ def next_response_tone(
     return "觀望、短答、先測試對方反應"
 
 
+def response_language(payload: dict[str, Any] | None) -> str:
+    value = (payload or {}).get("responseLanguage")
+    return "english" if value == "english" else "cantonese"
+
+
+def client_language_rules(language: str) -> list[str]:
+    if language == "english":
+        return [
+            "clientText must be natural spoken English from the service user's point of view.",
+            "Do not answer clientText in Cantonese, Chinese, or bilingual mixing unless the student explicitly quotes a phrase.",
+            "Preserve the same case facts, personality, resistance, disclosure pacing, and risk gating; only change the response language.",
+        ]
+    return [
+        "clientText must be natural spoken Hong Kong Cantonese in Traditional Chinese.",
+        "Do not answer clientText in English, Simplified Chinese, or Mandarin-style phrasing.",
+    ]
+
+
+def professional_feedback_language_rule(language: str) -> str:
+    if language == "english":
+        return "Write all feedback/report strings in professional English. Do not use Chinese prose except fixed JSON keys."
+    return "Write all feedback/report strings in professional Hong Kong Traditional Chinese. Do not use English prose except fixed JSON keys."
+
+
 def build_client_prompt(payload: dict[str, Any]) -> str:
     case_profile = payload["caseProfile"]
+    language = response_language(payload)
     client_registry = DEFAULT_PROMPT_REGISTRY.client_prompt()
     base_rules = client_registry.get("baseRules") if isinstance(client_registry.get("baseRules"), list) else []
     json_shape = client_registry.get("jsonShape") if isinstance(client_registry.get("jsonShape"), dict) else {
-        "clientText": "1-4 natural spoken Hong Kong Cantonese sentences",
+        "clientText": "1-4 natural spoken Hong Kong Cantonese sentences" if language == "cantonese" else "1-4 natural spoken English sentences",
         "affect": "neutral|defensive|ashamed|anxious|reflective|withdrawn|irritated|sad",
         "resistanceLevel": "none|mild|moderate|high",
         "riskSignals": ["short risk labels"],
@@ -2588,13 +2770,24 @@ def build_client_prompt(payload: dict[str, Any]) -> str:
         },
         "motionCue": "neutral|look_down|avoid_eye_contact|rub_hands|lean_back|slow_nod",
     }
-    client_rules_text = PromptRegistry.render_lines(base_rules) or PromptRegistry.render_lines([
+    json_shape = dict(json_shape)
+    json_shape["clientText"] = (
+        "1-4 natural spoken Hong Kong Cantonese sentences"
+        if language == "cantonese"
+        else "1-4 natural spoken English sentences"
+    )
+    language_rule_markers = ("clientText must be natural spoken", "Do not answer clientText")
+    client_rules = [
+        str(rule)
+        for rule in base_rules
+        if isinstance(rule, str) and not any(marker in rule for marker in language_rule_markers)
+    ] if base_rules else [
         "Do not diagnose, prescribe treatment, or speak as the social worker.",
         "Stay in character as the service user described below.",
-        "clientText must be natural spoken Hong Kong Cantonese in Traditional Chinese.",
         "Use evidence cards only as style and behavior patterns. Do not copy their wording.",
         "Follow the socialWorkContextModel, groundingProfile, pieContext, adaptivePolicy, simulationStrategy, and sessionContinuity.",
-    ])
+    ]
+    client_rules_text = PromptRegistry.render_lines([*client_rules, *client_language_rules(language)])
     json_shape_text = json.dumps(json_shape, ensure_ascii=False, indent=2)
     history = payload.get("history", [])
     recent_events = sorted(case_profile.get("eventTimeline", []), key=lambda event: event.get("day", 0), reverse=True)[:7]
@@ -2629,6 +2822,7 @@ Rules:
 Case:
 {json.dumps({
   "caseType": case_profile.get("caseType"),
+  "responseLanguage": language,
   "simulatorStage": case_profile.get("simulatorStage"),
   "localizedIssueContext": localized_issue_context(case_profile.get("caseType")),
   "client": case_profile.get("client"),
@@ -2735,7 +2929,7 @@ def score_client_realism(payload: dict[str, Any], response: dict[str, Any]) -> d
 
     matched = matched_realism_anchors(case_type, text)
     context_consistency = assess_context_consistency(payload, response)
-    language_score = language_naturalness_score(text)
+    language_score = language_naturalness_score(text, response_language(payload))
     over_disclosure = bool(
         (student_turn_count <= 1 and revealed and not (supportive and risk_asked))
         or (openness < 4 and len(revealed) > 1)
@@ -2918,10 +3112,22 @@ def matched_realism_anchors(case_type: str | None, text: str) -> list[dict[str, 
     return [anchor for anchor in anchors if any(pattern.lower() in lower_text for pattern in anchor.get("patterns", []))]
 
 
-def language_naturalness_score(text: str) -> float:
+def language_naturalness_score(text: str, language: str = "cantonese") -> float:
     score = 8.5
     if not text:
         return 2.0
+    if language == "english":
+        cjk_chars = re.findall(r"[\u3400-\u9fff]", text)
+        score -= min(4.0, len(cjk_chars) * 0.3)
+        if re.search(r"(唔|冇|咩|啲|嘅|喺|係|啦|囉|咋|啫|㗎|點)", text):
+            score -= 2.0
+        if not re.search(r"\b(I|I'm|I’m|me|my|you|it|that|because|just|really|kind of|don't|can’t|can't)\b", text, re.I):
+            score -= 1.0
+        if re.search(r"(as a social worker|treatment goal|intervention plan|clinically|diagnosis|I recommend that you)", text, re.I):
+            score -= 2.2
+        if len(text) > 230:
+            score -= 1.0
+        return max(0.0, min(10.0, score))
     simplified_markers = re.findall(r"[这说为觉过还们对后么]", text)
     score -= min(3.0, len(simplified_markers) * 0.45)
     if re.search(r"\b(I|you|because|therapy|diagnosis|depression|client|social worker)\b", text, re.I):
@@ -2958,15 +3164,23 @@ def round_score(value: float) -> float:
 
 def build_realism_repair_prompt(payload: dict[str, Any], response: dict[str, Any], assessment: dict[str, Any]) -> str:
     case_profile = payload.get("caseProfile", {})
+    language = response_language(payload)
     repair_registry = DEFAULT_PROMPT_REGISTRY.realism_repair()
     repair_goals = repair_registry.get("repairGoals") if isinstance(repair_registry.get("repairGoals"), list) else []
-    repair_goals_text = PromptRegistry.render_lines(repair_goals) or PromptRegistry.render_lines([
-        "Keep clientText in natural spoken Hong Kong Cantonese.",
+    filtered_goals = [
+        str(goal)
+        for goal in repair_goals
+        if isinstance(goal, str) and "clientText in natural spoken" not in goal
+    ]
+    repair_goals_text = PromptRegistry.render_lines([
+        *(filtered_goals or [
         "Do not sound like a therapist, supervisor, narrator, or textbook.",
         "Reduce over-disclosure when rapport/clientOpenness is low.",
         "Match the student's move and continue session continuity.",
         "Do not copy evidence card wording.",
         "Do not include operational self-harm, violence, medication, substance-use, or diagnosis details.",
+        ]),
+        *client_language_rules(language),
     ])
     return f"""
 Repair the service-user response so it feels like a realistic social-work interview participant.
@@ -3016,6 +3230,7 @@ def build_supervisor_prompt(payload: dict[str, Any]) -> str:
     history = payload.get("history", [])
     recent_history = "\n".join(f"{turn.get('speaker')}: {turn.get('text')}" for turn in history[-10:])
     case_profile = payload["caseProfile"]
+    language = response_language(payload)
     return f"""
 Evaluate the student's social-work interviewing performance. This is training feedback, not clinical diagnosis.
 
@@ -3042,7 +3257,7 @@ Return exactly this JSON shape:
 Use 0-10 scores. Evaluate rapport, empathy, open questions, reflective listening,
 risk exploration, autonomy support, strengths perspective, and safety next steps.
 Do not claim treatment success or clinical improvement. Describe interview quality and client openness.
-Write all feedback strings in professional Hong Kong Traditional Chinese. Do not use English prose except fixed JSON keys.
+{professional_feedback_language_rule(language)}
 Risk feedback may mention simulated risk language, but must avoid operational harm details and diagnostic claims.
 
 Case state:
@@ -3066,13 +3281,21 @@ Recent interview:
 
 def build_post_session_supervisor_prompt(payload: dict[str, Any]) -> str:
     case_profile = payload["caseProfile"]
+    language = response_language(payload)
     supervisor_registry = DEFAULT_PROMPT_REGISTRY.post_session_supervisor()
     report_rules = supervisor_registry.get("reportRules") if isinstance(supervisor_registry.get("reportRules"), list) else []
     frameworks = supervisor_registry.get("frameworks") if isinstance(supervisor_registry.get("frameworks"), list) else []
-    report_rules_text = PromptRegistry.render_lines(report_rules) or PromptRegistry.render_lines([
-        "Use professional Hong Kong Traditional Chinese for all report strings.",
+    filtered_report_rules = [
+        str(rule)
+        for rule in report_rules
+        if isinstance(rule, str) and "report strings" not in rule
+    ]
+    report_rules_text = PromptRegistry.render_lines([
+        professional_feedback_language_rule(language),
+        *(filtered_report_rules or [
         "Use 0-10 scores. Evaluate the full session, not only the latest turn.",
         "Do not reveal undisclosed hidden facts as if the student already knew them.",
+        ]),
     ])
     frameworks_text = PromptRegistry.render_lines(frameworks, prefix="") or "\n".join([
         "1. Competency-Based Social Work Education: engagement, assessment, ethics, intervention planning.",
@@ -3151,7 +3374,7 @@ Return exactly this JSON shape:
 
 {report_rules_text}
 For hkPcfAssessment, use the deterministic seed below as the scoring anchor. You may rewrite
-evidence and recommendations in professional Hong Kong Traditional Chinese, but do not invent
+evidence and recommendations in the requested report language, but do not invent
 facts or change the competency meaning.
 Base the report on these frameworks:
 {frameworks_text}
@@ -3417,7 +3640,7 @@ def count_matches(text: str, pattern: str) -> int:
     return len(re.findall(pattern, text, re.I))
 
 
-def merge_hk_pcf_assessment(candidate: Any, seed: dict[str, Any]) -> dict[str, Any]:
+def merge_hk_pcf_assessment(candidate: Any, seed: dict[str, Any], language: str = "cantonese") -> dict[str, Any]:
     merged = seed.copy()
     if isinstance(candidate, dict):
         evidence = candidate.get("evidence") if isinstance(candidate.get("evidence"), dict) else {}
@@ -3431,10 +3654,19 @@ def merge_hk_pcf_assessment(candidate: Any, seed: dict[str, Any]) -> dict[str, A
             candidate.get("practiceRecommendations"),
             seed["practiceRecommendations"],
         )
-    merged["frameworkLabel"] = HK_PCF_FRAMEWORK_LABEL
-    merged["frameworkBasis"] = HK_PCF_FRAMEWORK_BASIS
+    if language == "english":
+        merged["frameworkLabel"] = "HK SWRB-aligned Practice Competency Framework"
+        merged["frameworkBasis"] = [
+            "Aligned with the Social Workers Registration Board Code of Practice.",
+            "Aligned with PCS 8th Edition training and professional competency expectations.",
+            "Used only as a local teaching and research prototype rubric.",
+        ]
+        merged["disclaimer"] = "This report is a local teaching/research prototype. It is not an official SWRB assessment and does not determine registration, qualification, or professional certification."
+    else:
+        merged["frameworkLabel"] = HK_PCF_FRAMEWORK_LABEL
+        merged["frameworkBasis"] = HK_PCF_FRAMEWORK_BASIS
+        merged["disclaimer"] = HK_PCF_DISCLAIMER
     merged["scores"] = seed["scores"]
-    merged["disclaimer"] = HK_PCF_DISCLAIMER
     return merged
 
 
@@ -3751,6 +3983,32 @@ def tts_style_for_affect(affect: Any, voice_style: Any) -> tuple[float, float]:
     return round(1.05 * rate_multiplier, 2), 0.0
 
 
+def ensure_wav_container(audio_content: bytes, sample_rate_hertz: int) -> bytes:
+    if audio_content.startswith(b"RIFF"):
+        return audio_content
+    channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate_hertz * channels * bits_per_sample // 8
+    block_align = channels * bits_per_sample // 8
+    data_size = len(audio_content)
+    header = b"".join([
+        b"RIFF",
+        struct.pack("<I", 36 + data_size),
+        b"WAVE",
+        b"fmt ",
+        struct.pack("<I", 16),
+        struct.pack("<H", 1),
+        struct.pack("<H", channels),
+        struct.pack("<I", sample_rate_hertz),
+        struct.pack("<I", byte_rate),
+        struct.pack("<H", block_align),
+        struct.pack("<H", bits_per_sample),
+        b"data",
+        struct.pack("<I", data_size),
+    ])
+    return header + audio_content
+
+
 def expression_weights_for_affect(affect: str, intensity: float = 1.0) -> dict[str, float]:
     intensity = min(1, max(0.25, intensity))
     mapping = {
@@ -3851,7 +4109,7 @@ def avatar_behavior_policy(
             ["studentMove:judgmentalOrDirective", f"resistance:{resistance}", f"affect:{model_affect}"],
             "評判或指令式語句通常降低合作感，因此用後靠和緊繃表情顯示關係距離增加。",
         )
-    elif resistance == "high" or affect in {"defensive", "irritated"}:
+    elif resistance == "high" or affect == "irritated":
         affect = "defensive" if affect != "irritated" else "irritated"
         motion = "lean_back"
         intensity = 0.78
@@ -3860,6 +4118,15 @@ def avatar_behavior_policy(
             "高阻抗／防衛姿態",
             [f"resistance:{resistance}", f"affect:{model_affect}", f"model_motion:{model_motion}"],
             "高阻抗或防衛語氣時使用後靠和較繃緊表情，避免誤呈現為合作或放鬆。",
+        )
+    elif affect == "defensive":
+        motion = "avoid_eye_contact"
+        intensity = 0.64
+        add_basis(
+            "defensive_guarded_avoidance",
+            "一般防衛／低幅度避眼",
+            [f"resistance:{resistance}", f"affect:{model_affect}", f"model_motion:{model_motion}"],
+            "一般防衛不必每次後靠，用避眼和收斂姿態保留戒備感，同時避免訪談中動作過度重複。",
         )
     elif affect == "anxious" and (case_type == "substance_recovery_meth" or "substance_withdrawal" in risk_signals):
         motion = "rub_hands"
@@ -4059,6 +4326,9 @@ def avatar_performance_plan(
     elif rule_ids & {"mocked_or_dismissed_recoil", "judgmental_directive_guard", "defensive_resistance_high"}:
         reaction_family = "defensive"
         reaction_clip = "reaction_mocked_recoil_small"
+    elif rule_ids & {"defensive_guarded_avoidance", "apology_repair_guarded"}:
+        reaction_family = "defensive"
+        reaction_clip = "reaction_apology_guarded_avoid"
     elif "shame_low_self_worth" in rule_ids or affect == "ashamed":
         reaction_family = "ashamed"
         reaction_clip = "reaction_shame_drop_gaze"
@@ -4139,6 +4409,15 @@ def avatar_performance_plan(
         release_ms = 700
         return_bridge_ms = 700
         release_curve = "soft"
+    strong_reaction = bool(
+        high_risk
+        or rule_ids
+        & {
+            "mocked_or_dismissed_recoil",
+            "judgmental_directive_guard",
+            "defensive_resistance_high",
+        }
+    )
     reaction_instance_id = f"reaction-{uuid.uuid4().hex[:12]}"
     return {
         "reactionInstanceId": reaction_instance_id,
@@ -4160,6 +4439,8 @@ def avatar_performance_plan(
         "motionLanguage": "seated-v1",
         "motionScriptId": f"sml_{reaction_family}_{'low' if high_risk else 'standard'}",
         "reactionFamily": reaction_family,
+        "idleMixOnly": not strong_reaction,
+        "idleAccentFamily": reaction_family,
         "preferredClipIds": preferred_clips,
         "variantPolicy": "avoid_recent",
         "variantSeed": reaction_instance_id,
@@ -4169,8 +4450,14 @@ def avatar_performance_plan(
     }
 
 
-def safe_repair_text(case_profile: dict[str, Any], response: dict[str, Any]) -> str:
+def safe_repair_text(case_profile: dict[str, Any], response: dict[str, Any], language: str = "cantonese") -> str:
     case_type = case_profile.get("caseType")
+    if language == "english":
+        if case_type == "substance_recovery_meth":
+            return "I can say I'm scared of withdrawal and relapsing, but I don't want to get into specific details. What I need right now is help finding safer support."
+        if case_type == "student_depression_bullying":
+            return "I don't want to describe it too specifically because that scares me. But sometimes the thought does come up, and I need someone to help me check whether I'm safe right now."
+        return "I don't want to go into specific details, but I really feel like I'm not coping. You can ask me slowly whether I'm safe right now, and whether there is anyone around who can help."
     if case_type == "substance_recovery_meth":
         return "我可以講到我好驚戒斷同復發，但啲太具體嘅做法我唔想講。其實我而家最需要係有人幫我搵一個安全啲嘅支援方法。"
     if case_type == "student_depression_bullying":

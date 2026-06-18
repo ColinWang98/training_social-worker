@@ -1,0 +1,46 @@
+app = "training-social-worker"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  ADK_SERVICE_HOST = "127.0.0.1"
+  ADK_SERVICE_PORT = "8765"
+  ADK_SERVICE_URL = "http://127.0.0.1:8765"
+  APP_AUTH_ENABLED = "true"
+  APP_AUTH_COOKIE_SECURE = "true"
+  DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+  DEEPSEEK_MODEL = "deepseek-chat"
+  GOOGLE_VOICE_ENABLED = "true"
+  GOOGLE_STT_LANGUAGE = "yue-Hant-HK"
+  GOOGLE_STT_MODEL = "google-stt-v1-auto"
+  GOOGLE_TTS_LANGUAGE = "yue-HK"
+  GOOGLE_TTS_VOICE = "yue-HK-Chirp3-HD-Achird"
+  GOOGLE_TTS_EN_LANGUAGE = "en-US"
+  GOOGLE_TTS_EN_VOICE = "en-US-Wavenet-D"
+  GOOGLE_TTS_AUDIO_ENCODING = "MP3"
+  LOCAL_EMBEDDING_ENABLED = "true"
+  LOCAL_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  LOCAL_EMBEDDING_BATCH_SIZE = "64"
+  LOCAL_EMBEDDING_DEVICE = "cpu"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[mounts]]
+  source = "social_work_data"
+  destination = "/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 4096

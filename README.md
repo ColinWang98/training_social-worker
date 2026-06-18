@@ -67,6 +67,17 @@ DEEPSEEK_MODEL=deepseek-chat
 ADK_SERVICE_PORT=8765
 ```
 
+Optional local access gate:
+
+```bash
+APP_AUTH_ENABLED=true
+APP_AUTH_USERNAME=teacher
+APP_AUTH_PASSWORD=strong-password
+APP_AUTH_SECRET=random-32-byte-secret
+```
+
+When enabled, the Node server protects the whole app, `/api/*`, and the voice WebSocket with HTTP Basic Auth plus a signed HttpOnly cookie. This is a prototype access gate, not a full multi-user learning-management login system.
+
 Run the full local stack:
 
 ```bash
@@ -78,6 +89,83 @@ Open:
 ```text
 http://127.0.0.1:5173/
 ```
+
+## Docker and Fly.io Deployment
+
+The repository includes a full Docker image path for the complete stack:
+
+- production React build
+- Node production server and API/WebSocket proxy
+- Python ADK sidecar
+- SQLite corpus/session data
+- local embedding model cache
+- VRM/avatar assets
+- Google STT/TTS support through secrets
+
+Build locally:
+
+```bash
+docker build -t social-work-avatar-lab:full .
+```
+
+Run locally with Docker:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e DEEPSEEK_API_KEY=your_key_here \
+  -e APP_AUTH_ENABLED=true \
+  -e APP_AUTH_USERNAME=teacher \
+  -e APP_AUTH_PASSWORD=strong-password \
+  -e APP_AUTH_SECRET=random-32-byte-secret \
+  -e GOOGLE_VOICE_ENABLED=true \
+  -e GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64="$(base64 -i /absolute/path/to/service-account.json)" \
+  social-work-avatar-lab:full
+```
+
+Open:
+
+```text
+http://127.0.0.1:8080/
+```
+
+Deploy to Fly.io:
+
+```bash
+fly launch --no-deploy
+fly volumes create social_work_data --size 3 --region sin
+fly secrets set DEEPSEEK_API_KEY=your_key_here
+fly secrets set APP_AUTH_USERNAME=teacher
+fly secrets set APP_AUTH_PASSWORD='strong-password'
+fly secrets set APP_AUTH_SECRET="$(openssl rand -hex 32)"
+fly secrets set GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64="$(base64 -i /absolute/path/to/service-account.json)"
+fly deploy
+```
+
+The included `fly.toml` uses:
+
+- app name: `training-social-worker`
+- region: `sin`
+- web port: `8080`
+- internal ADK port: `8765`
+- volume mount: `/data`
+- VM: 2 shared CPUs, 4096 MB memory
+- full-site access gate: enabled with username/password secrets
+
+The first start copies bundled `data/` into the mounted `/data` volume, then uses `/data` as the writable runtime store. API keys and Google service-account JSON must be provided through Fly secrets, not committed files.
+
+The Docker image is intentionally large because it includes Python dependencies, corpus files, avatar assets, and the local multilingual embedding model. If embedding is not needed in deployment, set:
+
+```bash
+fly secrets set LOCAL_EMBEDDING_ENABLED=false
+```
+
+For multiple deployment accounts, set this instead of `APP_AUTH_USERNAME` and `APP_AUTH_PASSWORD`:
+
+```bash
+fly secrets set APP_AUTH_USERS_JSON='[{"username":"teacher","password":"..."},{"username":"student01","password":"..."}]'
+```
+
+Anyone with a valid password can access the same prototype. The in-app trainee/instructor toggle is still a UI mode, not role-based authorization.
 
 ## Optional Google Voice
 
@@ -91,6 +179,17 @@ GOOGLE_TTS_LANGUAGE=yue-HK
 GOOGLE_TTS_VOICE=yue-HK-Chirp3-HD-Achird
 GOOGLE_VOICE_ENABLED=true
 ```
+
+For audio-aligned mouth movement, enable local Rhubarb lip-sync. Docker/Fly builds install Rhubarb at `/opt/rhubarb/rhubarb`; local development can use any downloaded Rhubarb binary:
+
+```bash
+LOCAL_RHUBARB_LIPSYNC_ENABLED=true
+RHUBARB_BIN=/absolute/path/to/rhubarb
+RHUBARB_RECOGNIZER=phonetic
+RHUBARB_TIMEOUT_MS=2500
+```
+
+If Rhubarb is missing or fails, TTS still works and the avatar falls back to the built-in text-based viseme timeline.
 
 Credentials must stay local and must not be committed.
 

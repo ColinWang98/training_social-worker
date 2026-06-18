@@ -3,7 +3,9 @@ import {
   ClientResponse,
   EvidenceCardListResponse,
   InterviewTurn,
+  LipSyncTimeline,
   PostSessionSupervisorReport,
+  ResponseLanguage,
   RetrievalOptions,
   SimulationMethod,
   SupervisorReview,
@@ -16,6 +18,7 @@ type InterviewRequest = {
   sessionId?: string | null;
   simulationMethod?: SimulationMethod;
   retrievalOptions?: RetrievalOptions;
+  responseLanguage?: ResponseLanguage;
 };
 
 type SupervisorRequest = {
@@ -34,6 +37,7 @@ type FinalReviewRequest = {
   caseProfile: CaseProfile;
   history: InterviewTurn[];
   sessionId?: string | null;
+  responseLanguage?: ResponseLanguage;
 };
 
 type SessionResponse = {
@@ -58,6 +62,7 @@ export type TtsRequest = {
   affect?: string;
   voiceStyle?: string;
   voice?: string;
+  language?: ResponseLanguage;
 };
 
 export type TtsResponse = {
@@ -65,6 +70,7 @@ export type TtsResponse = {
   audioBase64: string;
   provider: string;
   voice: string;
+  lipSync?: LipSyncTimeline;
 };
 
 export async function requestClientResponse(request: InterviewRequest): Promise<ClientResponse> {

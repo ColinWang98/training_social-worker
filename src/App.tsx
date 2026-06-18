@@ -8,13 +8,16 @@ import { affectPresets, avatarAssets, DEFAULT_AVATAR_ID, ExpressionWeights } fro
 import { estimateCantoneseSpeechDuration } from './lib/arkitExpressions';
 import { applyClientResponse, createTurn } from './lib/caseEngine';
 import { caseProfiles, johnDoCase } from './lib/caseProfile';
+import { t } from './lib/i18n';
 import {
   AffectLabel,
   CaseProfile,
   ClientResponse,
   InterviewTurn,
+  LipSyncTimeline,
   MotionCue,
   PostSessionSupervisorReport,
+  ResponseLanguage,
   RetrievalOptions,
   SimulationMethod,
 } from './lib/interviewTypes';
@@ -29,7 +32,16 @@ declare global {
   }
 }
 
-type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'transcribing' | 'recognized' | 'generating' | 'speaking' | 'error';
+type VoiceStatus =
+  | 'idle'
+  | 'connecting'
+  | 'listening'
+  | 'user_speaking'
+  | 'committing'
+  | 'generating'
+  | 'avatar_speaking'
+  | 'interrupted'
+  | 'error';
 
 export type AvatarBlendshapeDebug = {
   modelPath: string;
@@ -52,6 +64,8 @@ export type AvatarMotionDebug = {
   keyframeCount: number;
   durationMs: number;
   reactionFamily: string;
+  idleMixOnly: boolean;
+  idleAccentFamily: string;
   reactionWeight: number;
   bridgeProgress: number;
   recentMotionHistory: string[];
@@ -76,6 +90,7 @@ export default function App() {
   const [avatarMotionDebug, setAvatarMotionDebug] = useState<AvatarMotionDebug | null>(null);
   const [motionCue, setMotionCue] = useState<MotionCue>('neutral');
   const [simulationMethod, setSimulationMethod] = useState<SimulationMethod>('social_work_default');
+  const [responseLanguage, setResponseLanguage] = useState<ResponseLanguage>('cantonese');
   const [retrievalOptions, setRetrievalOptions] = useState<RetrievalOptions>({ embeddingEnabled: false });
   const [avatarAssetId, setAvatarAssetId] = useState(DEFAULT_AVATAR_ID);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -91,6 +106,7 @@ export default function App() {
     startedAtMs: 0,
     durationMs: 0,
     active: false,
+    lipSync: undefined as LipSyncTimeline | undefined,
   });
   const caseProfileRef = useRef(caseProfile);
   const turnsRef = useRef(turns);
@@ -106,7 +122,10 @@ export default function App() {
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const suppressAutoTtsRef = useRef(false);
   const lastVoiceTranscriptRef = useRef('');
+  const lastAsrSeqRef = useRef(0);
   const lastVoiceTtsTextRef = useRef('');
+  const bargeInSentRef = useRef(false);
+  const voiceStatusRef = useRef<VoiceStatus>(voiceStatus);
   const selectedAvatar = useMemo(
     () => avatarAssets.find((asset) => asset.id === avatarAssetId) ?? avatarAssets[0],
     [avatarAssetId],
@@ -145,11 +164,21 @@ export default function App() {
   }, [sessionId]);
 
   useEffect(() => {
+    voiceStatusRef.current = voiceStatus;
+  }, [voiceStatus]);
+
+  useEffect(() => {
     retrievalOptionsRef.current = retrievalOptions;
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'retrieval_options', retrievalOptions }));
     }
   }, [retrievalOptions]);
+
+  useEffect(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'response_language', responseLanguage }));
+    }
+  }, [responseLanguage]);
 
   const stopPlayback = useCallback(() => {
     if (audioElementRef.current) {
@@ -163,14 +192,17 @@ export default function App() {
     }
     setSpeechLevel(0);
     setVisemePlayback((current) => ({ ...current, active: false }));
-    setVoiceStatus((status) => (status === 'speaking' ? 'idle' : status));
+    setVoiceStatus((status) => {
+      if (status !== 'avatar_speaking') return status;
+      return wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle';
+    });
   }, []);
 
   const playBrowserSpeech = useCallback((response: ClientResponse) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(response.clientText);
-    utterance.lang = 'zh-HK';
+    utterance.lang = responseLanguage === 'english' ? 'en-US' : 'zh-HK';
     if (response.affect === 'anxious') {
       utterance.rate = 1.12;
     } else if (response.affect === 'withdrawn' || response.affect === 'sad' || response.affect === 'ashamed') {
@@ -183,27 +215,29 @@ export default function App() {
     utterance.pitch = response.affect === 'withdrawn' || response.affect === 'sad' ? 0.82 : 0.95;
     utterance.onstart = () => {
       const text = response.avatarDirective?.ttsText || response.clientText;
-      setVoiceStatus('speaking');
+      bargeInSentRef.current = false;
+      setVoiceStatus('avatar_speaking');
       setSpeechLevel(0.55);
       setVisemePlayback({
         text,
         startedAtMs: performance.now(),
-        durationMs: estimateCantoneseSpeechDuration(text),
+        durationMs: estimateSpeechDuration(text, responseLanguage),
         active: true,
+        lipSync: undefined,
       });
     };
     utterance.onend = () => {
       setSpeechLevel(0);
       setVisemePlayback((current) => ({ ...current, active: false }));
-      setVoiceStatus('idle');
+      setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     utterance.onerror = () => {
       setSpeechLevel(0);
       setVisemePlayback((current) => ({ ...current, active: false }));
-      setVoiceStatus('idle');
+      setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     window.speechSynthesis.speak(utterance);
-  }, []);
+  }, [responseLanguage]);
 
   const playTtsAudio = useCallback(async (tts: TtsResponse, text: string) => {
     stopPlayback();
@@ -211,7 +245,8 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     audioElementRef.current = audio;
-    setVoiceStatus('speaking');
+    bargeInSentRef.current = false;
+    setVoiceStatus('avatar_speaking');
 
     try {
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -242,20 +277,23 @@ export default function App() {
         startedAtMs: performance.now(),
         durationMs: Number.isFinite(audio.duration) && audio.duration > 0
           ? audio.duration * 1000
-          : estimateCantoneseSpeechDuration(text),
+          : estimateSpeechDuration(text, responseLanguage),
         active: true,
+        lipSync: tts.lipSync,
       });
     };
     audio.onended = () => {
       URL.revokeObjectURL(url);
       stopPlayback();
+      setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     audio.onerror = () => {
       URL.revokeObjectURL(url);
       stopPlayback();
+      setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     await audio.play();
-  }, [stopPlayback]);
+  }, [responseLanguage, stopPlayback]);
 
   const playTtsForResponse = useCallback(async (response: ClientResponse) => {
     const text = response.avatarDirective?.ttsText || response.clientText;
@@ -264,13 +302,14 @@ export default function App() {
         text,
         affect: response.affect,
         voiceStyle: response.avatarDirective?.voiceStyle,
-        voice: selectedAvatar.ttsVoice,
+        voice: responseLanguage === 'cantonese' ? selectedAvatar.ttsVoice : undefined,
+        language: responseLanguage,
       });
       await playTtsAudio(tts, text);
     } catch {
       playBrowserSpeech(response);
     }
-  }, [playBrowserSpeech, playTtsAudio, selectedAvatar.ttsVoice]);
+  }, [playBrowserSpeech, playTtsAudio, responseLanguage, selectedAvatar.ttsVoice]);
 
   useEffect(() => {
     if (!latestClientResponse?.clientText) {
@@ -358,7 +397,7 @@ export default function App() {
     }
     setVoiceEnabled(false);
     setPartialTranscript('');
-    setVoiceStatus((status) => (status === 'speaking' ? status : 'idle'));
+    setVoiceStatus((status) => (status === 'avatar_speaking' ? 'idle' : status === 'error' ? 'error' : 'idle'));
   }, []);
 
   const shutdownServices = useCallback(async () => {
@@ -367,20 +406,20 @@ export default function App() {
     setErrorMessage(null);
     stopPlayback();
     stopVoiceCapture();
-    setStatusMessage('正在停止本地服務...');
+    setStatusMessage(responseLanguage === 'english' ? 'Stopping local services...' : '正在停止本地服務...');
     try {
       const response = await fetch('/api/shutdown', { method: 'POST' });
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || `HTTP ${response.status}`);
       }
-      setStatusMessage('本地服務正在停止。');
+      setStatusMessage(responseLanguage === 'english' ? 'Local services are stopping.' : '本地服務正在停止。');
     } catch (error) {
       setIsShutdownPending(false);
-      setStatusMessage('停止服務失敗。');
-      setErrorMessage(error instanceof Error ? error.message : '停止服務失敗。');
+      setStatusMessage(responseLanguage === 'english' ? 'Failed to stop services.' : '停止服務失敗。');
+      setErrorMessage(error instanceof Error ? error.message : responseLanguage === 'english' ? 'Failed to stop services.' : '停止服務失敗。');
     }
-  }, [isShutdownPending, stopPlayback, stopVoiceCapture]);
+  }, [isShutdownPending, responseLanguage, stopPlayback, stopVoiceCapture]);
 
   useEffect(() => {
     return () => {
@@ -409,7 +448,7 @@ export default function App() {
       micStreamRef.current = stream;
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextCtor) {
-        throw new Error('此瀏覽器不支援 Web Audio API。');
+        throw new Error(responseLanguage === 'english' ? 'This browser does not support the Web Audio API.' : '此瀏覽器不支援 Web Audio API。');
       }
       const context = new AudioContextCtor();
       micContextRef.current = context;
@@ -425,6 +464,10 @@ export default function App() {
       wsRef.current = socket;
 
       socket.onopen = () => {
+        lastAsrSeqRef.current = 0;
+        lastVoiceTranscriptRef.current = '';
+        setPartialTranscript('');
+        setFinalTranscript('');
         socket.send(JSON.stringify({
           type: 'start',
           sessionId: sessionIdRef.current,
@@ -432,6 +475,7 @@ export default function App() {
           history: turnsRef.current,
           simulationMethod,
           retrievalOptions: retrievalOptionsRef.current,
+          responseLanguage,
           ttsVoice: selectedAvatar.ttsVoice,
           sampleRate: 16000,
         }));
@@ -440,21 +484,70 @@ export default function App() {
 
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data);
-        if (message.type === 'voice_ready') {
-          setVoiceStatus('listening');
+        const asrSeq = typeof message.utteranceSeq === 'number' ? message.utteranceSeq : undefined;
+        if (asrSeq !== undefined && asrSeq < lastAsrSeqRef.current) {
+          return;
+        }
+        if (asrSeq !== undefined) {
+          lastAsrSeqRef.current = asrSeq;
+        }
+        if (message.type === 'voice_ready' || message.type === 'listening_ready') {
+          bargeInSentRef.current = false;
+          setVoiceStatus((status) => (
+            status === 'generating' || status === 'avatar_speaking' || status === 'committing'
+              ? status
+              : 'listening'
+          ));
+          return;
+        }
+        if (message.type === 'speech_started') {
+          if (voiceStatusRef.current !== 'avatar_speaking' && voiceStatusRef.current !== 'generating') {
+            setVoiceStatus('user_speaking');
+          }
           return;
         }
         if (message.type === 'asr_partial') {
-          setPartialTranscript(message.transcript ?? '');
-          setVoiceStatus('transcribing');
+          const transcript = message.transcript ?? '';
+          setPartialTranscript(transcript);
+          if (
+            (voiceStatusRef.current === 'avatar_speaking' || voiceStatusRef.current === 'generating') &&
+            !bargeInSentRef.current &&
+            shouldTriggerBargeIn(transcript, lastVoiceTtsTextRef.current)
+          ) {
+            bargeInSentRef.current = true;
+            stopPlayback();
+            wsRef.current?.send(JSON.stringify({ type: 'barge_in', utteranceId: message.utteranceId }));
+            setVoiceStatus('interrupted');
+            return;
+          }
+          setVoiceStatus('user_speaking');
           return;
         }
         if (message.type === 'asr_final') {
           const transcript = message.transcript ?? '';
           lastVoiceTranscriptRef.current = transcript;
           setFinalTranscript(transcript);
+          setPartialTranscript('');
           setInputValue(transcript);
-          setVoiceStatus('recognized');
+          setVoiceStatus('committing');
+          return;
+        }
+        if (message.type === 'utterance_committed') {
+          const transcript = message.transcript ?? '';
+          if (transcript) {
+            lastVoiceTranscriptRef.current = transcript;
+            setInputValue(transcript);
+          }
+          setVoiceStatus('committing');
+          return;
+        }
+        if (message.type === 'barge_in_ack') {
+          setVoiceStatus('interrupted');
+          return;
+        }
+        if (message.type === 'avatar_speech_cancelled') {
+          stopPlayback();
+          setVoiceStatus('listening');
           return;
         }
         if (message.type === 'turn_started') {
@@ -475,22 +568,23 @@ export default function App() {
             audioBase64: message.audioBase64,
             provider: message.provider,
             voice: message.voice,
+            lipSync: message.lipSync,
           }, lastVoiceTtsTextRef.current);
           return;
         }
         if (message.type === 'error') {
-          setVoiceError(message.message ?? '語音服務暫時不可用。');
+          setVoiceError(message.message ?? (responseLanguage === 'english' ? 'Voice service is temporarily unavailable.' : '語音服務暫時不可用。'));
           setVoiceStatus('error');
         }
       };
 
       socket.onerror = () => {
-        setVoiceError('語音連線失敗，請確認 ADK sidecar 已啟動並已設定 Google credentials。');
+        setVoiceError(responseLanguage === 'english' ? 'Voice connection failed. Check that the ADK sidecar is running and Google credentials are configured.' : '語音連線失敗，請確認 ADK sidecar 已啟動並已設定 Google credentials。');
         setVoiceStatus('error');
       };
       socket.onclose = () => {
         setVoiceEnabled(false);
-        setVoiceStatus((status) => (status === 'speaking' ? status : 'idle'));
+        setVoiceStatus((status) => (status === 'avatar_speaking' ? 'idle' : status === 'error' ? 'error' : 'idle'));
       };
 
       processor.onaudioprocess = (event) => {
@@ -509,14 +603,14 @@ export default function App() {
       mutedOutput.connect(context.destination);
     } catch (error) {
       stopVoiceCapture();
-      setVoiceError(error instanceof Error ? error.message : '無法啟動麥克風。');
+      setVoiceError(error instanceof Error ? error.message : responseLanguage === 'english' ? 'Unable to start the microphone.' : '無法啟動麥克風。');
       setVoiceStatus('error');
     }
-  }, [commitClientResponse, finalTranscript, inputValue, isPending, partialTranscript, playTtsAudio, selectedAvatar.ttsVoice, simulationMethod, stopVoiceCapture, voiceEnabled]);
+  }, [commitClientResponse, finalTranscript, inputValue, isPending, partialTranscript, playTtsAudio, responseLanguage, selectedAvatar.ttsVoice, simulationMethod, stopPlayback, stopVoiceCapture, voiceEnabled]);
 
   const stopCurrentUtterance = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: 'stop_utterance' }));
-    setVoiceStatus('recognized');
+    wsRef.current?.send(JSON.stringify({ type: 'commit_utterance', reason: 'manual' }));
+    setVoiceStatus('committing');
   }, []);
 
   const handleCaseChange = useCallback((caseId: string) => {
@@ -557,18 +651,21 @@ export default function App() {
         sessionId,
         simulationMethod,
         retrievalOptions,
+        responseLanguage,
       });
       await commitClientResponse(studentText, clientResponse);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : '本輪生成失敗。請檢查本地 API 或 DeepSeek key 後重試。',
+          : responseLanguage === 'english'
+            ? 'This turn failed. Check the local API or DeepSeek key, then retry.'
+            : '本輪生成失敗。請檢查本地 API 或 DeepSeek key 後重試。',
       );
     } finally {
       setIsPending(false);
     }
-  }, [caseProfile, commitClientResponse, inputValue, isPending, retrievalOptions, sessionEnded, sessionId, simulationMethod, turns]);
+  }, [caseProfile, commitClientResponse, inputValue, isPending, responseLanguage, retrievalOptions, sessionEnded, sessionId, simulationMethod, turns]);
 
   const handleEndSession = useCallback(async () => {
     if (turns.length === 0 || isPending || isFinalReviewPending) return;
@@ -579,6 +676,7 @@ export default function App() {
         caseProfile,
         history: turns,
         sessionId,
+        responseLanguage,
       });
       setPostSessionReport(report);
       setSessionEnded(true);
@@ -588,12 +686,14 @@ export default function App() {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : '結束訪談評估生成失敗，請檢查 ADK service 或 DeepSeek key。',
+          : responseLanguage === 'english'
+            ? 'Final review generation failed. Check the ADK service or DeepSeek key.'
+            : '結束訪談評估生成失敗，請檢查 ADK service 或 DeepSeek key。',
       );
     } finally {
       setIsFinalReviewPending(false);
     }
-  }, [caseProfile, isFinalReviewPending, isPending, sessionId, stopPlayback, stopVoiceCapture, turns]);
+  }, [caseProfile, isFinalReviewPending, isPending, responseLanguage, sessionId, stopPlayback, stopVoiceCapture, turns]);
 
   if (activePage === 'evidence-cards') {
     return (
@@ -602,6 +702,7 @@ export default function App() {
           window.location.hash = '';
           setActivePage('training');
         }}
+        uiLanguage={responseLanguage}
       />
     );
   }
@@ -611,48 +712,66 @@ export default function App() {
       <section className="avatarColumn" aria-label="Avatar preview">
         <header className="appHeader">
           <div>
-            <h1>社工訪談 Avatar 訓練</h1>
-            <p>
-              本地訪談訓練原型：VRM 服務對象、個案狀態、DeepSeek 對話、
-              檢索式證據卡及督導回饋。
-            </p>
+            <h1>{t(responseLanguage, 'appTitle')}</h1>
+            <p>{t(responseLanguage, 'appSubtitle')}</p>
           </div>
           <div className="headerMeta">
-            <label htmlFor="avatarAsset">Avatar</label>
-            <select
-              id="avatarAsset"
-              value={selectedAvatar.id}
-              onChange={(event) => {
-                stopPlayback();
-                setAvatarAssetId(event.target.value);
-              }}
-            >
-              {avatarAssets.map((asset) => (
-                <option key={asset.id} value={asset.id}>
-                  {asset.displayName}
-                </option>
-              ))}
-            </select>
-            <span>{selectedAvatar.localUseNote}</span>
-            <span>{selectedAvatar.ttsVoiceLabel ?? '環境預設粵語聲線'}</span>
-            <button
-              type="button"
-              className="headerSecondaryButton"
-              onClick={() => {
-                window.location.hash = 'evidence-cards';
-                setActivePage('evidence-cards');
-              }}
-            >
-              Evidence Cards
-            </button>
-            <button
-              type="button"
-              className="shutdownButton"
-              onClick={shutdownServices}
-              disabled={isShutdownPending}
-            >
-              {isShutdownPending ? '正在停止' : '停止服務'}
-            </button>
+            <div className="headerControl">
+              <label htmlFor="avatarAsset">{t(responseLanguage, 'avatarLabel')}</label>
+              <select
+                id="avatarAsset"
+                value={selectedAvatar.id}
+                onChange={(event) => {
+                  stopPlayback();
+                  setAvatarAssetId(event.target.value);
+                }}
+              >
+                {avatarAssets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="headerControl">
+              <span className="headerControlLabel">{t(responseLanguage, 'voiceLabel')}</span>
+              <div className="modeSwitch compactModeSwitch" aria-label={t(responseLanguage, 'voiceLabel')}>
+                <button
+                  type="button"
+                  className={responseLanguage === 'cantonese' ? 'active' : ''}
+                  onClick={() => setResponseLanguage('cantonese')}
+                >
+                  粵語
+                </button>
+                <button
+                  type="button"
+                  className={responseLanguage === 'english' ? 'active' : ''}
+                  onClick={() => setResponseLanguage('english')}
+                >
+                  English
+                </button>
+              </div>
+            </div>
+            <div className="headerActions">
+              <button
+                type="button"
+                className="headerSecondaryButton"
+                onClick={() => {
+                  window.location.hash = 'evidence-cards';
+                  setActivePage('evidence-cards');
+                }}
+              >
+                {t(responseLanguage, 'evidenceCards')}
+              </button>
+              <button
+                type="button"
+                className="shutdownButton"
+                onClick={shutdownServices}
+                disabled={isShutdownPending}
+              >
+                {isShutdownPending ? t(responseLanguage, 'stopping') : t(responseLanguage, 'stopService')}
+              </button>
+            </div>
           </div>
         </header>
 
@@ -683,8 +802,8 @@ export default function App() {
         />
 
         <footer className="appFooter">
-          <span>模型：{selectedAvatar.appAssetPath}</span>
-          <span>署名：{selectedAvatar.author}；{selectedAvatar.redistribution}</span>
+          <span>{t(responseLanguage, 'model')}：{selectedAvatar.appAssetPath}</span>
+          <span>{t(responseLanguage, 'credit')}：{selectedAvatar.author}；{selectedAvatar.redistribution}</span>
         </footer>
       </section>
 
@@ -705,6 +824,7 @@ export default function App() {
         onStopUtterance={stopCurrentUtterance}
         onStopVoice={stopVoiceCapture}
         onSubmit={handleSubmit}
+        uiLanguage={responseLanguage}
       />
 
       <CasePanel
@@ -735,6 +855,7 @@ export default function App() {
         onSimulationMethodChange={setSimulationMethod}
         onRetrievalOptionsChange={setRetrievalOptions}
         onVrmaFile={setVrmaFile}
+        uiLanguage={responseLanguage}
       />
     </main>
   );
@@ -761,6 +882,31 @@ function baselineExpressionWeights(mood: AffectLabel): ExpressionWeights {
   return Object.fromEntries(
     Object.entries(preset).map(([name, value]) => [name, Math.min(0.26, value * 0.42)]),
   ) as ExpressionWeights;
+}
+
+function estimateSpeechDuration(text: string, language: ResponseLanguage) {
+  if (language === 'english') {
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    return Math.max(900, Math.min(14000, wordCount * 360 + 450));
+  }
+  return estimateCantoneseSpeechDuration(text);
+}
+
+function shouldTriggerBargeIn(transcript: string, ttsText: string) {
+  const normalizedTranscript = normalizeVoiceText(transcript);
+  if (normalizedTranscript.length < 2) return false;
+  const normalizedTts = normalizeVoiceText(ttsText);
+  if (!normalizedTts) return true;
+  if (normalizedTts.includes(normalizedTranscript) && normalizedTranscript.length < 8) return false;
+  if (normalizedTranscript.includes(normalizedTts.slice(0, Math.min(12, normalizedTts.length)))) return false;
+  return true;
+}
+
+function normalizeVoiceText(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .trim();
 }
 
 function floatToPcm16(input: Float32Array) {

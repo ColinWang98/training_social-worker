@@ -1,0 +1,15 @@
+{
+  "assetId": "streamoji-0sfg",
+  "sourceFile": "/Users/colin/Downloads/avatar-0sFGvLNDtV76PHuF5Rb9 (1).glb",
+  "appAssetPath": "public/models/streamoji-avatar-0sFGvLNDtV76PHuF5Rb9.glb",
+  "sha256": "38b093c0fc4ef3c866de595785fb1166d239e77df361671368248723f6f1adda",
+  "bytes": 4757056,
+  "assetGenerator": "Streamoji Avatar Generator",
+  "assetCopyright": "Streamoji Avatars",
+  "format": "glTF 2.0 GLB",
+  "vrmExtension": false,
+  "arkitTargetCount": 52,
+  "arkit52Available": true,
+  "runtimeNote": "Loaded through the generic GLB branch. ARKit blendshapes are available; VRM humanoid seated pose runtime and VRMA playback are disabled for this asset.",
+  "licenseNote": "Use only inside the local prototype unless Streamoji account/license terms allow redistribution."
+}
