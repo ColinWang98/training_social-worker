@@ -66,6 +66,11 @@ export type AvatarMotionDebug = {
   reactionFamily: string;
   idleMixOnly: boolean;
   idleAccentFamily: string;
+  activeIdlePhrase: string;
+  motionEnergy: string;
+  reactionReason: string;
+  expressionPhase: string;
+  expressionOverlayWeight: number;
   reactionWeight: number;
   bridgeProgress: number;
   recentMotionHistory: string[];

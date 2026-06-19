@@ -504,6 +504,11 @@ export function CasePanel({
                   <DirectiveItem label="Family" value={avatarMotionDebug.reactionFamily} />
                   <DirectiveItem label="Idle Mix" value={avatarMotionDebug.idleMixOnly ? 'on' : 'off'} />
                   <DirectiveItem label="Idle Accent" value={avatarMotionDebug.idleAccentFamily} />
+                  <DirectiveItem label="Idle Phrase" value={avatarMotionDebug.activeIdlePhrase} />
+                  <DirectiveItem label="Energy" value={avatarMotionDebug.motionEnergy} />
+                  <DirectiveItem label="Reason" value={avatarMotionDebug.reactionReason} />
+                  <DirectiveItem label="Expression Phase" value={avatarMotionDebug.expressionPhase} />
+                  <DirectiveItem label="Expression Overlay" value={`${Math.round(avatarMotionDebug.expressionOverlayWeight * 100)}%`} />
                   <DirectiveItem label="Reaction" value={`${Math.round(avatarMotionDebug.reactionWeight * 100)}%`} />
                   <DirectiveItem label="Bridge" value={`${Math.round(avatarMotionDebug.bridgeProgress * 100)}%`} />
                   <DirectiveItem label="坐姿安全" value={avatarMotionDebug.seatedSafety} />
@@ -554,6 +559,8 @@ export function CasePanel({
                     <DirectiveItem label="釋放時間" value={`${avatarDirective.performancePlan.releaseMs}ms`} />
                     <DirectiveItem label="Bridge" value={`${avatarDirective.performancePlan.returnBridgeMs ?? 700}ms`} />
                     <DirectiveItem label="Family" value={avatarDirective.performancePlan.reactionFamily ?? 'soft_engagement'} />
+                    <DirectiveItem label="Energy" value={avatarDirective.performancePlan.motionEnergy ?? 'low'} />
+                    <DirectiveItem label="Reason" value={avatarDirective.performancePlan.reactionReason ?? 'idle'} />
                     <DirectiveItem label="Variant" value={avatarDirective.performancePlan.variantPolicy ?? 'soft_random'} />
                     <DirectiveItem label="Mask" value={avatarDirective.performancePlan.playbackMask} />
                     <DirectiveItem label="來源" value={avatarDirective.performancePlan.clipSource} />

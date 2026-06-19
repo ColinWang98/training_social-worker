@@ -1,0 +1,8 @@
+{
+  "source": "mixamo_manual",
+  "notes": [
+    "Manual Mixamo candidates only. Do not auto-load raw Mixamo full-body clips in runtime.",
+    "Only clips converted or validated as upper-body seated overlays may be copied into public/avatar-clips/manifest.json."
+  ],
+  "clips": []
+}

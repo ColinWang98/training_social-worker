@@ -143,6 +143,13 @@ export type AvatarPerformancePlan = {
   reactionFamily?: AvatarReactionFamily;
   idleMixOnly?: boolean;
   idleAccentFamily?: AvatarReactionFamily;
+  motionEnergy?: 'low' | 'medium' | 'high';
+  reactionReason?: 'idle' | 'engagement' | 'emotion_shift' | 'rupture' | 'repair' | 'risk';
+  expressionTimeline?: {
+    phase: 'attack' | 'hold' | 'release' | 'idle';
+    profile: AffectLabel;
+    weight: number;
+  }[];
   preferredClipIds?: string[];
   excludedRecentClipIds?: string[];
   variantPolicy?: 'avoid_recent' | 'soft_random';

@@ -4319,35 +4319,57 @@ def avatar_performance_plan(
     reaction_clip = None
     reaction_family = "soft_engagement"
     fallback_used = False
+    reaction_reason = "idle"
+    motion_energy = "low"
+    strong_rule_ids = {
+        "mocked_or_dismissed_recoil",
+        "judgmental_directive_guard",
+        "defensive_resistance_high",
+    }
+    clear_reaction_rule_ids = {
+        "defensive_guarded_avoidance",
+        "apology_repair_guarded",
+        "shame_low_self_worth",
+        "reflective_change_talk",
+    }
 
     if high_risk or "safety_low_intensity" in rule_ids:
         reaction_family = "risk"
         reaction_clip = "reaction_risk_low_intensity_downward"
-    elif rule_ids & {"mocked_or_dismissed_recoil", "judgmental_directive_guard", "defensive_resistance_high"}:
+        reaction_reason = "risk"
+        motion_energy = "medium"
+    elif rule_ids & strong_rule_ids:
         reaction_family = "defensive"
         reaction_clip = "reaction_mocked_recoil_small"
+        reaction_reason = "rupture"
+        motion_energy = "high"
     elif rule_ids & {"defensive_guarded_avoidance", "apology_repair_guarded"}:
         reaction_family = "defensive"
         reaction_clip = "reaction_apology_guarded_avoid"
+        reaction_reason = "repair"
+        motion_energy = "medium"
     elif "shame_low_self_worth" in rule_ids or affect == "ashamed":
         reaction_family = "ashamed"
         reaction_clip = "reaction_shame_drop_gaze"
+        reaction_reason = "emotion_shift"
+        motion_energy = "medium"
     elif "reflective_change_talk" in rule_ids or affect == "reflective" or motion == "slow_nod":
         reaction_family = "reflective"
         reaction_clip = "reaction_reflective_single_nod"
+        reaction_reason = "engagement"
     elif affect == "anxious" or motion == "avoid_eye_contact":
         reaction_family = "anxious"
-        reaction_clip = "reaction_anxiety_finger_fidget"
+        reaction_reason = "emotion_shift"
     elif affect in {"withdrawn", "sad"} or motion == "look_down":
         reaction_family = "withdrawn"
-        reaction_clip = "reaction_withdrawn_short_answer"
+        reaction_reason = "emotion_shift"
     elif motion == "lean_back":
         reaction_family = "defensive"
-        reaction_clip = "reaction_judgment_guard_hands"
+        reaction_reason = "emotion_shift"
 
     if motion == "rub_hands" and not reaction_clip:
         reaction_family = "anxious"
-        reaction_clip = "reaction_anxiety_micro_rub"
+        reaction_reason = "emotion_shift"
         fallback_used = True
 
     preferred_by_family = {
@@ -4356,35 +4378,55 @@ def avatar_performance_plan(
             "reaction_mocked_recoil_side",
             "reaction_judgment_guard_hands",
             "reaction_irritated_head_turn",
+            "reaction_micro_defensive_glance",
+            "reaction_guarded_hand_settle",
+            "reaction_contained_irritation",
         ],
         "withdrawn": [
             "reaction_withdrawn_short_answer",
             "reaction_shame_drop_gaze",
             "reaction_shame_hand_press",
+            "reaction_brief_side_look",
+            "reaction_hesitant_answer",
+            "reaction_shame_breath",
         ],
         "anxious": [
             "reaction_anxiety_micro_rub",
             "reaction_anxiety_finger_fidget",
             "reaction_shame_hand_press",
+            "reaction_anxiety_thumb_rub",
+            "reaction_hesitant_answer",
+            "reaction_guarded_hand_settle",
         ],
         "ashamed": [
             "reaction_shame_drop_gaze",
             "reaction_shame_hand_press",
             "reaction_withdrawn_short_answer",
+            "reaction_shame_breath",
+            "reaction_hesitant_answer",
+            "reaction_brief_side_look",
         ],
         "reflective": [
             "reaction_reflective_single_nod",
             "reaction_reflective_double_micro_nod",
             "reaction_soft_engagement_forward",
+            "reaction_soft_acknowledgement",
+            "reaction_uncertain_half_nod",
         ],
         "risk": [
             "reaction_risk_low_intensity_downward",
             "reaction_shame_hand_press",
             "reaction_withdrawn_short_answer",
+            "reaction_low_risk_breath",
+            "reaction_shame_breath",
+            "reaction_hesitant_answer",
         ],
         "soft_engagement": [
             "reaction_soft_engagement_forward",
             "reaction_reflective_single_nod",
+            "reaction_soft_acknowledgement",
+            "reaction_uncertain_half_nod",
+            "reaction_hesitant_answer",
         ],
     }
     preferred_clips = preferred_by_family.get(reaction_family, [])
@@ -4411,14 +4453,21 @@ def avatar_performance_plan(
         release_curve = "soft"
     strong_reaction = bool(
         high_risk
-        or rule_ids
-        & {
-            "mocked_or_dismissed_recoil",
-            "judgmental_directive_guard",
-            "defensive_resistance_high",
-        }
+        or rule_ids & strong_rule_ids
+        or (rule_ids & clear_reaction_rule_ids and affect in {"ashamed", "irritated", "defensive"})
     )
+    if not strong_reaction and reaction_reason in {"emotion_shift", "engagement"}:
+        reaction_clip = None
+        motion_energy = "low"
+    elif reaction_clip and motion_energy == "low":
+        motion_energy = "medium"
     reaction_instance_id = f"reaction-{uuid.uuid4().hex[:12]}"
+    expression_timeline = [
+        {"phase": "attack", "profile": affect, "weight": 0.36 if strong_reaction else 0.18},
+        {"phase": "hold", "profile": affect, "weight": 0.28 if strong_reaction else 0.14},
+        {"phase": "release", "profile": affect, "weight": 0.12},
+        {"phase": "idle", "profile": affect, "weight": 0.08},
+    ]
     return {
         "reactionInstanceId": reaction_instance_id,
         "baselineIdleClipId": baseline_idle_clip,
@@ -4441,6 +4490,9 @@ def avatar_performance_plan(
         "reactionFamily": reaction_family,
         "idleMixOnly": not strong_reaction,
         "idleAccentFamily": reaction_family,
+        "motionEnergy": motion_energy,
+        "reactionReason": reaction_reason,
+        "expressionTimeline": expression_timeline,
         "preferredClipIds": preferred_clips,
         "variantPolicy": "avoid_recent",
         "variantSeed": reaction_instance_id,

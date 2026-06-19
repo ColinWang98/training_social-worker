@@ -154,6 +154,12 @@ export function VrmStage({
   const seatedRuntimeAvailableRef = useRef(true);
   const wasUpperBodyAnimationActiveRef = useRef(false);
   const idleRandomControllerRef = useRef(createIdleRandomController());
+  const idlePhraseControllerRef = useRef(createIdlePhraseController());
+  const motionExpressionOverlayRef = useRef<{
+    weights: ArkitBlendshapeWeights;
+    phase: string;
+    weight: number;
+  }>({ weights: {}, phase: 'idle', weight: 0 });
   const lastArkitDebugAtRef = useRef(0);
   const reactionKeyRef = useRef(reactionKey);
   const speechLevelRef = useRef(speechLevel);
@@ -575,7 +581,8 @@ export function VrmStage({
               eyeBlinkRight: blinkStrength,
             }
             : {};
-        const arkitWeights = mergeArkitWeights(profileWeights, viseme.weights, blink);
+        const motionOverlay = motionExpressionOverlayRef.current;
+        const arkitWeights = mergeArkitWeights(profileWeights, motionOverlay.weights, viseme.weights, blink);
         arkitController.apply(arkitWeights, delta);
         if (elapsed - lastArkitDebugAtRef.current > 1.5) {
           lastArkitDebugAtRef.current = elapsed;
@@ -634,6 +641,15 @@ export function VrmStage({
           idleRandomControllerRef.current.update(elapsed, delta),
           performancePlanRef.current?.idleAccentFamily,
         );
+        const idlePhrase = idlePhraseControllerRef.current.update(
+          elapsed,
+          delta,
+          performanceState.baselineIdleClipId,
+          performancePlanRef.current?.idleAccentFamily,
+          performancePlanRef.current?.motionEnergy ?? 'low',
+          isResponseGestureActive,
+        );
+        const idleWithPhrase = addIdleToBlendedPose(idlePulse, idlePhrase.pose);
         const residualReactionPulse = Math.max(
           performanceState.reactionWeight,
           performanceState.releaseProgress < 1 ? (1 - performanceState.releaseProgress) * 0.28 : 0,
@@ -648,7 +664,7 @@ export function VrmStage({
           holdMsRef.current,
           priorityRef.current,
         );
-        const idleBlendedPose = addIdleToBlendedPose(blendedPose, idlePulse);
+        const idleBlendedPose = addIdleToBlendedPose(blendedPose, idleWithPhrase);
         const scriptedMotion = seatedMotionScriptControllerRef.current.update(
           performancePlanRef.current,
           reactionKeyRef.current,
@@ -681,13 +697,27 @@ export function VrmStage({
         const activeGazeCue = scriptedMotion.sample
           ? motionCueForScriptedGaze(scriptedMotion.sample.gaze, activeCue)
           : activeCue;
+        const expressionOverlay = expressionOverlayForPerformance(
+          performancePlanRef.current,
+          performanceState,
+          idlePhrase.id,
+        );
+        motionExpressionOverlayRef.current = expressionOverlay;
+        const motionRuntimeDebug = {
+          ...scriptedMotion.debug,
+          activeIdlePhrase: idlePhrase.id,
+          motionEnergy: performancePlanRef.current?.motionEnergy ?? 'low',
+          reactionReason: performancePlanRef.current?.reactionReason ?? 'idle',
+          expressionPhase: expressionOverlay.phase,
+          expressionOverlayWeight: expressionOverlay.weight,
+        };
         return {
           activeCue,
           activeGazeCue,
           activeIntensity,
           expressionReactionPulse: performanceState.reactionWeight,
           finalPose,
-          motionRuntimeDebug: scriptedMotion.debug,
+          motionRuntimeDebug,
           residualReactionPulse,
         };
     };
@@ -1121,6 +1151,11 @@ function createSeatedMotionScriptController() {
         reactionFamily: plan?.reactionFamily ?? 'soft_engagement',
         idleMixOnly: Boolean(plan?.idleMixOnly),
         idleAccentFamily: plan?.idleAccentFamily ?? plan?.reactionFamily ?? 'soft_engagement',
+        activeIdlePhrase: 'none',
+        motionEnergy: plan?.motionEnergy ?? 'low',
+        reactionReason: plan?.reactionReason ?? 'idle',
+        expressionPhase: 'idle',
+        expressionOverlayWeight: 0,
         reactionWeight: performanceState.reactionWeight,
         bridgeProgress: performanceState.bridgeProgress,
         recentMotionHistory: [...recentMotionHistory],
@@ -1223,6 +1258,16 @@ const PROCEDURAL_SEATED_CLIPS: Record<string, ProceduralClip> = {
   reaction_withdrawn_short_answer: seatedClip('reaction_withdrawn_short_answer', 'reaction', 'withdrawn', 'look_down', 2000, 'avoidant', ['withdrawn'], true, true, 0.42, 'low_energy'),
   reaction_irritated_head_turn: seatedClip('reaction_irritated_head_turn', 'reaction', 'defensive', 'avoid_eye_contact', 1800, 'guarded', ['irritated', 'defensive'], false, true, 0.5, 'guarded'),
   reaction_soft_engagement_forward: seatedClip('reaction_soft_engagement_forward', 'reaction', 'soft_engagement', 'slow_nod', 2200, 'camera_soft', ['reflective', 'neutral'], true, true, 0.34, 'soft'),
+  reaction_micro_defensive_glance: seatedClip('reaction_micro_defensive_glance', 'reaction', 'defensive', 'avoid_eye_contact', 1550, 'guarded', ['defensive'], true, true, 0.28, 'guarded'),
+  reaction_guarded_hand_settle: seatedClip('reaction_guarded_hand_settle', 'reaction', 'defensive', 'neutral', 1900, 'guarded', ['defensive'], true, true, 0.26, 'guarded'),
+  reaction_brief_side_look: seatedClip('reaction_brief_side_look', 'reaction', 'withdrawn', 'avoid_eye_contact', 1650, 'avoidant', ['withdrawn'], true, true, 0.3, 'low_energy'),
+  reaction_contained_irritation: seatedClip('reaction_contained_irritation', 'reaction', 'defensive', 'avoid_eye_contact', 1750, 'guarded', ['irritated'], false, true, 0.38, 'guarded'),
+  reaction_soft_acknowledgement: seatedClip('reaction_soft_acknowledgement', 'reaction', 'soft_engagement', 'slow_nod', 1850, 'camera_soft', ['neutral', 'reflective'], true, true, 0.24, 'soft'),
+  reaction_hesitant_answer: seatedClip('reaction_hesitant_answer', 'reaction', 'withdrawn', 'look_down', 2100, 'avoidant', ['withdrawn', 'anxious'], true, true, 0.28, 'low_energy'),
+  reaction_uncertain_half_nod: seatedClip('reaction_uncertain_half_nod', 'reaction', 'reflective', 'slow_nod', 1950, 'camera_soft', ['reflective', 'anxious'], true, true, 0.26, 'soft'),
+  reaction_shame_breath: seatedClip('reaction_shame_breath', 'reaction', 'ashamed', 'look_down', 2600, 'downward', ['ashamed', 'sad'], true, true, 0.3, 'low_energy'),
+  reaction_anxiety_thumb_rub: seatedClip('reaction_anxiety_thumb_rub', 'reaction', 'anxious', 'rub_hands', 2400, 'scanning', ['anxious'], true, true, 0.3, 'soft'),
+  reaction_low_risk_breath: seatedClip('reaction_low_risk_breath', 'reaction', 'risk', 'look_down', 3200, 'downward', ['sad', 'withdrawn'], true, false, 0.22, 'low_energy'),
 };
 
 function seatedClip(
@@ -1353,8 +1398,223 @@ function zeroIdleRandom(): IdleRandomState {
   };
 }
 
+function emptyBlendedPose(): BlendedPose {
+  return { pose: emptyPoseLayer(), armPose: emptyArmLayer() };
+}
+
+function emptyPoseLayer(): PoseLayer {
+  return {
+    hipX: 0,
+    hipY: 0,
+    hipZ: 0,
+    spineX: 0,
+    spineY: 0,
+    chestX: 0,
+    chestY: 0,
+    chestZ: 0,
+    neckX: 0,
+    neckY: 0,
+    headX: 0,
+    headY: 0,
+    headZ: 0,
+    armX: 0,
+    forearmX: 0,
+    leftArmY: 0,
+    rightArmY: 0,
+    leftArmZ: 0,
+    rightArmZ: 0,
+  };
+}
+
+function emptyArmLayer(): ArmLayer {
+  return {
+    upperArmX: 0,
+    leftUpperArmY: 0,
+    rightUpperArmY: 0,
+    leftUpperArmZ: 0,
+    rightUpperArmZ: 0,
+    leftLowerArmX: 0,
+    rightLowerArmX: 0,
+    leftLowerArmY: 0,
+    rightLowerArmY: 0,
+    leftLowerArmZ: 0,
+    rightLowerArmZ: 0,
+    handX: 0,
+    leftHandY: 0,
+    rightHandY: 0,
+    leftHandZ: 0,
+    rightHandZ: 0,
+  };
+}
+
 function randomRange(min: number, max: number) {
   return min + Math.random() * (max - min);
+}
+
+type MotionEnergy = NonNullable<AvatarPerformancePlan['motionEnergy']>;
+type IdlePhraseId =
+  | 'listening_stillness'
+  | 'soft_gaze_shift'
+  | 'small_inhale_exhale'
+  | 'lap_hand_settle'
+  | 'finger_micro_fidget'
+  | 'shoulder_settle'
+  | 'downward_glance'
+  | 'guarded_scan'
+  | 'soft_half_nod'
+  | 'ashamed_hand_press'
+  | 'low_energy_breath';
+
+type IdlePhrase = {
+  id: IdlePhraseId;
+  families: Array<ReactionFamily | 'neutral'>;
+  minGap: number;
+  duration: number;
+  energy: MotionEnergy;
+};
+
+type IdlePhraseState = {
+  id: IdlePhraseId;
+  pose: BlendedPose;
+};
+
+const IDLE_PHRASES: IdlePhrase[] = [
+  { id: 'listening_stillness', families: ['neutral', 'soft_engagement', 'reflective'], minGap: 4.2, duration: 2.8, energy: 'low' },
+  { id: 'soft_gaze_shift', families: ['neutral', 'soft_engagement', 'reflective'], minGap: 3.4, duration: 2.2, energy: 'low' },
+  { id: 'small_inhale_exhale', families: ['neutral', 'withdrawn', 'ashamed', 'risk'], minGap: 3.8, duration: 2.6, energy: 'low' },
+  { id: 'lap_hand_settle', families: ['neutral', 'defensive', 'withdrawn', 'ashamed'], minGap: 4.6, duration: 2.4, energy: 'low' },
+  { id: 'finger_micro_fidget', families: ['anxious', 'defensive'], minGap: 3.2, duration: 2.2, energy: 'low' },
+  { id: 'shoulder_settle', families: ['defensive', 'anxious', 'soft_engagement'], minGap: 5.2, duration: 2.6, energy: 'low' },
+  { id: 'downward_glance', families: ['withdrawn', 'ashamed', 'risk'], minGap: 3.4, duration: 2.4, energy: 'low' },
+  { id: 'guarded_scan', families: ['defensive', 'anxious'], minGap: 4.8, duration: 2.8, energy: 'medium' },
+  { id: 'soft_half_nod', families: ['reflective', 'soft_engagement'], minGap: 4.0, duration: 2.0, energy: 'low' },
+  { id: 'ashamed_hand_press', families: ['ashamed', 'withdrawn', 'risk'], minGap: 5.0, duration: 2.8, energy: 'low' },
+  { id: 'low_energy_breath', families: ['withdrawn', 'risk', 'ashamed'], minGap: 4.5, duration: 3.2, energy: 'low' },
+];
+
+function createIdlePhraseController() {
+  let active: IdlePhrase | null = null;
+  let activeStartedAt = 0;
+  let nextChangeAt = 0;
+  const recent: IdlePhraseId[] = [];
+
+  return {
+    update(
+      elapsed: number,
+      _delta: number,
+      baselineClipId: string,
+      accentFamily: ReactionFamily | undefined,
+      motionEnergy: MotionEnergy,
+      reactionActive: boolean,
+    ): IdlePhraseState {
+      const activeAge = active ? elapsed - activeStartedAt : Number.POSITIVE_INFINITY;
+      if (reactionActive) {
+        active = null;
+        nextChangeAt = elapsed + randomRange(1.4, 2.4);
+        return { id: 'listening_stillness', pose: emptyBlendedPose() };
+      }
+      if (!active || activeAge > active.duration) {
+        if (elapsed >= nextChangeAt) {
+          active = selectIdlePhrase(baselineClipId, accentFamily, motionEnergy, recent);
+          activeStartedAt = elapsed;
+          recent.unshift(active.id);
+          recent.splice(5);
+          nextChangeAt = elapsed + active.duration + randomRange(active.minGap, active.minGap + 2.2);
+        } else {
+          active = null;
+        }
+      }
+      if (!active) return { id: 'listening_stillness', pose: emptyBlendedPose() };
+      const local = Math.max(0, elapsed - activeStartedAt);
+      const envelope = Math.sin(Math.min(1, local / Math.max(active.duration, 0.1)) * Math.PI);
+      return {
+        id: active.id,
+        pose: idlePhrasePose(active.id, local, envelope, motionEnergy),
+      };
+    },
+  };
+}
+
+function selectIdlePhrase(
+  baselineClipId: string,
+  accentFamily: ReactionFamily | undefined,
+  motionEnergy: MotionEnergy,
+  recent: IdlePhraseId[],
+) {
+  const family = accentFamily ?? familyFromIdleClip(baselineClipId);
+  const energyRank: Record<MotionEnergy, number> = { low: 0, medium: 1, high: 2 };
+  const candidates = IDLE_PHRASES.filter((phrase) =>
+    phrase.families.includes(family) &&
+    !recent.slice(0, 3).includes(phrase.id) &&
+    energyRank[phrase.energy] <= Math.max(1, energyRank[motionEnergy]),
+  );
+  const pool = candidates.length ? candidates : IDLE_PHRASES.filter((phrase) => phrase.families.includes(family));
+  return pool[Math.floor(Math.random() * pool.length)] ?? IDLE_PHRASES[0];
+}
+
+function familyFromIdleClip(clipId: string): ReactionFamily | 'neutral' {
+  if (clipId.includes('guarded')) return 'defensive';
+  if (clipId.includes('anxious')) return 'anxious';
+  if (clipId.includes('ashamed')) return 'ashamed';
+  if (clipId.includes('withdrawn') || clipId.includes('sleepy')) return 'withdrawn';
+  return 'neutral';
+}
+
+function idlePhrasePose(id: IdlePhraseId, local: number, envelope: number, energy: MotionEnergy): BlendedPose {
+  const energyScale = energy === 'high' ? 1 : energy === 'medium' ? 0.82 : 0.62;
+  const w = envelope * energyScale;
+  const soft = Math.sin(local * 1.7) * w;
+  const quick = Math.sin(local * 5.4) * w;
+  const pose = emptyPoseLayer();
+  const armPose = emptyArmLayer();
+
+  if (id === 'soft_gaze_shift') {
+    pose.neckY += 0.018 * soft;
+    pose.headY += 0.035 * soft;
+  } else if (id === 'small_inhale_exhale') {
+    pose.spineX += 0.014 * w;
+    pose.chestX += 0.024 * w;
+    pose.headX += 0.008 * w;
+  } else if (id === 'lap_hand_settle') {
+    armPose.leftLowerArmX += 0.028 * w;
+    armPose.rightLowerArmX += 0.028 * w;
+    armPose.leftHandY -= 0.03 * w;
+    armPose.rightHandY += 0.03 * w;
+  } else if (id === 'finger_micro_fidget') {
+    armPose.leftHandY += 0.018 * quick;
+    armPose.rightHandY -= 0.018 * quick;
+    armPose.leftLowerArmY -= 0.014 * quick;
+    armPose.rightLowerArmY += 0.014 * quick;
+  } else if (id === 'shoulder_settle') {
+    pose.chestX -= 0.018 * w;
+    armPose.upperArmX += 0.024 * w;
+  } else if (id === 'downward_glance') {
+    pose.neckX -= 0.035 * w;
+    pose.headX -= 0.065 * w;
+    pose.headY += 0.02 * soft;
+  } else if (id === 'guarded_scan') {
+    pose.chestY += 0.024 * soft;
+    pose.neckY += 0.04 * soft;
+    pose.headY += 0.07 * soft;
+    armPose.leftLowerArmX += 0.025 * w;
+    armPose.rightLowerArmX += 0.025 * w;
+  } else if (id === 'soft_half_nod') {
+    const nod = Math.sin(Math.min(Math.PI, local * 2.5)) * w;
+    pose.neckX += 0.035 * nod;
+    pose.headX += 0.075 * nod;
+  } else if (id === 'ashamed_hand_press') {
+    pose.headX -= 0.04 * w;
+    armPose.leftLowerArmX += 0.045 * w;
+    armPose.rightLowerArmX += 0.045 * w;
+    armPose.leftHandY -= 0.06 * w;
+    armPose.rightHandY += 0.06 * w;
+  } else if (id === 'low_energy_breath') {
+    pose.spineX += 0.02 * w;
+    pose.chestX += 0.03 * w;
+    pose.headX -= 0.018 * w;
+  }
+
+  return { pose, armPose };
 }
 
 function reactionClipJitter(duration: number) {
@@ -1564,6 +1824,60 @@ function proceduralClipPose(
   } else if (clipId === 'reaction_soft_engagement_forward') {
     pose.chestX += 0.04 * intensity;
     pose.headX += 0.035 * intensity;
+    armPose.leftLowerArmX += 0.04 * intensity;
+    armPose.rightLowerArmX += 0.04 * intensity;
+  } else if (clipId === 'reaction_micro_defensive_glance') {
+    pose.headY += 0.12 * intensity;
+    pose.neckY += 0.08 * intensity;
+    pose.chestX -= 0.018 * intensity;
+    armPose.leftLowerArmX += 0.035 * intensity;
+    armPose.rightLowerArmX += 0.035 * intensity;
+  } else if (clipId === 'reaction_guarded_hand_settle') {
+    pose.chestX -= 0.025 * intensity;
+    pose.headX -= 0.02 * intensity;
+    armPose.leftLowerArmX += 0.06 * intensity;
+    armPose.rightLowerArmX += 0.06 * intensity;
+    armPose.leftHandY -= 0.08 * intensity;
+    armPose.rightHandY += 0.08 * intensity;
+  } else if (clipId === 'reaction_brief_side_look') {
+    pose.headY += 0.14 * intensity;
+    pose.neckY += 0.08 * intensity;
+    pose.headX -= 0.035 * intensity;
+  } else if (clipId === 'reaction_contained_irritation') {
+    pose.neckY -= 0.12 * intensity;
+    pose.headY -= 0.18 * intensity;
+    pose.chestY -= 0.025 * intensity;
+    armPose.leftHandY -= 0.04 * intensity;
+    armPose.rightHandY += 0.04 * intensity;
+  } else if (clipId === 'reaction_soft_acknowledgement') {
+    const nod = Math.sin(Math.min(Math.PI, (phase % 1.2) * Math.PI));
+    pose.headX += nod * 0.045 * intensity;
+    pose.neckX += nod * 0.018 * intensity;
+  } else if (clipId === 'reaction_hesitant_answer') {
+    pose.headX -= 0.06 * intensity;
+    pose.headY += 0.06 * intensity;
+    pose.chestX += 0.02 * intensity;
+    armPose.leftLowerArmX += 0.04 * intensity;
+    armPose.rightLowerArmX += 0.04 * intensity;
+  } else if (clipId === 'reaction_uncertain_half_nod') {
+    const nod = Math.sin(Math.min(Math.PI, (phase % 1.5) * Math.PI));
+    pose.headX += nod * 0.055 * intensity;
+    pose.headY += soft * 1.2;
+  } else if (clipId === 'reaction_shame_breath') {
+    pose.chestX += 0.045 * intensity;
+    pose.headX -= 0.08 * intensity;
+    armPose.leftLowerArmX += 0.045 * intensity;
+    armPose.rightLowerArmX += 0.045 * intensity;
+  } else if (clipId === 'reaction_anxiety_thumb_rub') {
+    pose.neckY += soft;
+    armPose.leftHandY += quick * 0.5;
+    armPose.rightHandY -= quick * 0.5;
+    armPose.leftLowerArmY -= quick * 0.2;
+    armPose.rightLowerArmY += quick * 0.2;
+  } else if (clipId === 'reaction_low_risk_breath') {
+    pose.chestX += 0.035 * intensity;
+    pose.neckX -= 0.055 * intensity;
+    pose.headX -= 0.09 * intensity;
     armPose.leftLowerArmX += 0.04 * intensity;
     armPose.rightLowerArmX += 0.04 * intensity;
   }
@@ -1813,6 +2127,100 @@ function mergeArkitWeights(...layers: ArkitBlendshapeWeights[]): ArkitBlendshape
     });
   });
   return merged as ArkitBlendshapeWeights;
+}
+
+function expressionOverlayForPerformance(
+  plan: AvatarPerformancePlan | undefined,
+  state: AvatarPerformanceState,
+  idlePhraseId: string,
+): { weights: ArkitBlendshapeWeights; phase: string; weight: number } {
+  const family = plan?.reactionFamily ?? 'soft_engagement';
+  let phase = 'idle';
+  let weight = 0;
+  if (state.attackWeight > 0.001) {
+    phase = 'attack';
+    weight = state.attackWeight;
+  } else if (state.holdWeight > 0.001) {
+    phase = 'hold';
+    weight = Math.min(1, state.holdWeight);
+  } else if (state.releaseWeight > 0.001 || state.bridgeWeight > 0.001) {
+    phase = 'release';
+    weight = Math.max(state.releaseWeight, state.bridgeWeight);
+  }
+
+  if (plan?.expressionTimeline?.length) {
+    const timed = plan.expressionTimeline.find((item) => item.phase === phase)
+      ?? plan.expressionTimeline.find((item) => item.phase === 'idle');
+    if (timed) weight = Math.max(weight, timed.weight);
+  }
+
+  if (plan?.idleMixOnly) {
+    weight = Math.min(weight, 0.22);
+  }
+  if (phase === 'idle') {
+    weight = idlePhraseExpressionWeight(idlePhraseId);
+  }
+
+  const scaled = Math.min(0.7, Math.max(0, weight));
+  return {
+    weights: motionExpressionWeights(family, idlePhraseId, scaled),
+    phase,
+    weight: scaled,
+  };
+}
+
+function idlePhraseExpressionWeight(idlePhraseId: string) {
+  if (idlePhraseId === 'listening_stillness') return 0.04;
+  if (idlePhraseId === 'soft_gaze_shift' || idlePhraseId === 'soft_half_nod') return 0.08;
+  if (idlePhraseId === 'downward_glance' || idlePhraseId === 'ashamed_hand_press') return 0.12;
+  if (idlePhraseId === 'finger_micro_fidget' || idlePhraseId === 'guarded_scan') return 0.1;
+  return 0.06;
+}
+
+function motionExpressionWeights(
+  family: ReactionFamily,
+  idlePhraseId: string,
+  weight: number,
+): ArkitBlendshapeWeights {
+  if (weight <= 0.001) return {};
+  const w = weight;
+  const base: ArkitBlendshapeWeights = {};
+
+  if (family === 'defensive') {
+    base.browDownLeft = 0.42 * w;
+    base.browDownRight = 0.42 * w;
+    base.eyeSquintLeft = 0.18 * w;
+    base.eyeSquintRight = 0.18 * w;
+    base.mouthPressLeft = 0.22 * w;
+    base.mouthPressRight = 0.22 * w;
+  } else if (family === 'anxious') {
+    base.browInnerUp = 0.34 * w;
+    base.eyeWideLeft = 0.2 * w;
+    base.eyeWideRight = 0.2 * w;
+    base.mouthStretchLeft = 0.16 * w;
+    base.mouthStretchRight = 0.16 * w;
+  } else if (family === 'ashamed' || family === 'withdrawn' || family === 'risk') {
+    base.browInnerUp = 0.26 * w;
+    base.eyeSquintLeft = 0.08 * w;
+    base.eyeSquintRight = 0.08 * w;
+    base.mouthPressLeft = 0.18 * w;
+    base.mouthPressRight = 0.18 * w;
+    base.mouthFrownLeft = 0.16 * w;
+    base.mouthFrownRight = 0.16 * w;
+  } else if (family === 'reflective' || family === 'soft_engagement') {
+    base.browInnerUp = 0.1 * w;
+    base.mouthClose = 0.08 * w;
+  }
+
+  if (idlePhraseId === 'downward_glance' || idlePhraseId === 'ashamed_hand_press' || idlePhraseId === 'low_energy_breath') {
+    base.eyeLookDownLeft = Math.max(base.eyeLookDownLeft ?? 0, 0.24 * w);
+    base.eyeLookDownRight = Math.max(base.eyeLookDownRight ?? 0, 0.24 * w);
+  }
+  if (idlePhraseId === 'guarded_scan' || idlePhraseId === 'soft_gaze_shift') {
+    base.eyeSquintLeft = Math.max(base.eyeSquintLeft ?? 0, 0.08 * w);
+    base.eyeSquintRight = Math.max(base.eyeSquintRight ?? 0, 0.08 * w);
+  }
+  return base;
 }
 
 function arkitDebugSnapshot(

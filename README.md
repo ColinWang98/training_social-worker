@@ -264,6 +264,25 @@ student text
 
 The avatar is driven by semantic directives, not raw LLM bone control. The frontend maps affect, motion cue, case baseline, and performance plan into seated upper-body VRM motion.
 
+### Mixamo motion candidates
+
+Mixamo is treated as a manual review source, not a runtime dependency. Download candidate animations yourself from Mixamo and place them under:
+
+```text
+public/avatar-clips/_incoming/mixamo/
+```
+
+Recommended export settings are FBX/Collada, Without Skin, 30 FPS, and In Place when available. Register and validate a candidate with:
+
+```bash
+npm run mixamo:register -- --file public/avatar-clips/_incoming/mixamo/<file>.fbx --family reflective --label "Subtle thinking"
+npm run mixamo:validate
+```
+
+Raw Mixamo clips remain `debug_only`, `autoLoad=false`, and `seatedRuntime=false`. They must be converted or constrained to upper-body seated overlays before being promoted to the main avatar clip manifest.
+
+`mixamo:register` writes a local ignored manifest at `public/avatar-clips/_incoming/mixamo/manifest.local.json`. The tracked `public/avatar-clips/mixamo-manifest.json` remains a clean template so GitHub/Fly builds do not depend on local FBX files.
+
 ## Evidence Cards
 
 Evidence cards are normalized examples of service-user language, issue tags, affect, risk signals, resistance patterns, and disclosure depth. Runtime retrieval uses them as style and reaction-pattern grounding.

@@ -20,6 +20,8 @@
     "profile:adapt": "python3 scripts/adapt-profile.py",
     "vrma:download": "node scripts/download-vrma-candidates.mjs",
     "vrma:validate": "node scripts/validate-vrma-manifest.mjs",
+    "mixamo:register": "node scripts/register-mixamo-clip.mjs",
+    "mixamo:validate": "node scripts/validate-mixamo-clip.mjs",
     "avatar:motion:test": "node scripts/validate-seated-motion.mjs",
     "vrm:arkit": "node scripts/generate-arkit-proxy-vrm.mjs",
     "vrm:inspect": "node scripts/inspect-vrm-blendshapes.mjs",

@@ -24,3 +24,8 @@ public/models/*.vrm
 public/models/*.glb
 public/avatar-clips/**/*.vrma
 public/avatar-clips/_incoming/
+!public/avatar-clips/_incoming/
+public/avatar-clips/_incoming/*
+!public/avatar-clips/_incoming/mixamo/
+public/avatar-clips/_incoming/mixamo/*
+!public/avatar-clips/_incoming/mixamo/README.md
