@@ -266,7 +266,7 @@ The avatar is driven by semantic directives, not raw LLM bone control. The front
 
 ### Mixamo motion candidates
 
-Mixamo is treated as a manual review source, not a runtime dependency. Download candidate animations yourself from Mixamo and place them under:
+Mixamo is treated as a manual review source and optional local runtime overlay, not a required dependency. Download candidate animations yourself from Mixamo and place them under:
 
 ```text
 public/avatar-clips/_incoming/mixamo/
@@ -277,11 +277,12 @@ Recommended export settings are FBX/Collada, Without Skin, 30 FPS, and In Place 
 ```bash
 npm run mixamo:register -- --file public/avatar-clips/_incoming/mixamo/<file>.fbx --family reflective --label "Subtle thinking"
 npm run mixamo:validate
+npm run mixamo:runtime:test
 ```
 
-Raw Mixamo clips remain `debug_only`, `autoLoad=false`, and `seatedRuntime=false`. They must be converted or constrained to upper-body seated overlays before being promoted to the main avatar clip manifest.
+Raw Mixamo clips remain `debug_only`, `autoLoad=false`, and `seatedRuntime=false`. The runtime never plays raw FBX directly on the avatar. If the local ignored manifest and FBX files are present, the frontend samples only upper-body quaternion tracks, ignores hips/root/legs/feet, lowers the motion scale, and blends the result as an idle/speech/reaction overlay. If the files are absent, avatar motion falls back to the built-in seated motion language and procedural idle library.
 
-`mixamo:register` writes a local ignored manifest at `public/avatar-clips/_incoming/mixamo/manifest.local.json`. The tracked `public/avatar-clips/mixamo-manifest.json` remains a clean template so GitHub/Fly builds do not depend on local FBX files.
+`mixamo:register` writes a local ignored manifest at `public/avatar-clips/_incoming/mixamo/manifest.local.json`. The tracked `public/avatar-clips/mixamo-manifest.json` remains a clean template so GitHub/Fly builds do not require local FBX files. A local Docker/Fly build can still include the ignored incoming FBX files if they exist in the build context.
 
 ## Evidence Cards
 

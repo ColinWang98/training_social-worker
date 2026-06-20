@@ -71,6 +71,9 @@ export type AvatarMotionDebug = {
   reactionReason: string;
   expressionPhase: string;
   expressionOverlayWeight: number;
+  mixamoClipId?: string;
+  mixamoStatus?: string;
+  mixamoWeight?: number;
   reactionWeight: number;
   bridgeProgress: number;
   recentMotionHistory: string[];

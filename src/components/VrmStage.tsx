@@ -28,6 +28,7 @@ import {
   LipSyncTimeline,
   MotionCue,
 } from '../lib/interviewTypes';
+import { createMixamoOverlayController } from '../lib/mixamoSeatedOverlay';
 import {
   compileSeatedMotionScript,
   sampleSeatedMotionProgram,
@@ -155,6 +156,7 @@ export function VrmStage({
   const wasUpperBodyAnimationActiveRef = useRef(false);
   const idleRandomControllerRef = useRef(createIdleRandomController());
   const idlePhraseControllerRef = useRef(createIdlePhraseController());
+  const mixamoOverlayControllerRef = useRef(createMixamoOverlayController());
   const motionExpressionOverlayRef = useRef<{
     weights: ArkitBlendshapeWeights;
     phase: string;
@@ -252,6 +254,7 @@ export function VrmStage({
     let tickCount = 0;
     let lastDebugAt = 0;
     setStageNotice('正在載入 Avatar...');
+    mixamoOverlayControllerRef.current.load();
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf7f8fb);
@@ -665,6 +668,18 @@ export function VrmStage({
           priorityRef.current,
         );
         const idleBlendedPose = addIdleToBlendedPose(blendedPose, idleWithPhrase);
+        const mixamoOverlay = mixamoOverlayControllerRef.current.update({
+          plan: performancePlanRef.current,
+          performanceState,
+          idlePhraseId: idlePhrase.id,
+          speechLevel: speechLevelRef.current,
+          elapsed,
+          delta,
+          activeIntensity,
+        });
+        const mixamoBlendedPose = mixamoOverlay.sample
+          ? addSeatedMotionOverlay(idleBlendedPose, mixamoOverlay.sample, mixamoOverlay.weight)
+          : idleBlendedPose;
         const scriptedMotion = seatedMotionScriptControllerRef.current.update(
           performancePlanRef.current,
           reactionKeyRef.current,
@@ -673,7 +688,7 @@ export function VrmStage({
         );
         const scriptedReactionPose = scriptedMotion.sample
           ? addSeatedMotionOverlay(
-            idleBlendedPose,
+            mixamoBlendedPose,
             scriptedMotion.sample,
             performanceState.reactionWeight,
           )
@@ -692,8 +707,8 @@ export function VrmStage({
         const finalPose = scriptedReactionPose
           ? scriptedReactionPose
           : proceduralReactionPose
-          ? blendBlendedPose(idleBlendedPose, proceduralReactionPose, performanceState.reactionWeight)
-          : idleBlendedPose;
+          ? blendBlendedPose(mixamoBlendedPose, proceduralReactionPose, performanceState.reactionWeight)
+          : mixamoBlendedPose;
         const activeGazeCue = scriptedMotion.sample
           ? motionCueForScriptedGaze(scriptedMotion.sample.gaze, activeCue)
           : activeCue;
@@ -710,6 +725,9 @@ export function VrmStage({
           reactionReason: performancePlanRef.current?.reactionReason ?? 'idle',
           expressionPhase: expressionOverlay.phase,
           expressionOverlayWeight: expressionOverlay.weight,
+          mixamoClipId: mixamoOverlay.clipId,
+          mixamoStatus: mixamoOverlay.status,
+          mixamoWeight: mixamoOverlay.weight,
         };
         return {
           activeCue,

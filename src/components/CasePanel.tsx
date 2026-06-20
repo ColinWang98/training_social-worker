@@ -509,6 +509,9 @@ export function CasePanel({
                   <DirectiveItem label="Reason" value={avatarMotionDebug.reactionReason} />
                   <DirectiveItem label="Expression Phase" value={avatarMotionDebug.expressionPhase} />
                   <DirectiveItem label="Expression Overlay" value={`${Math.round(avatarMotionDebug.expressionOverlayWeight * 100)}%`} />
+                  <DirectiveItem label="Mixamo" value={avatarMotionDebug.mixamoStatus ?? 'off'} />
+                  <DirectiveItem label="Mixamo Clip" value={avatarMotionDebug.mixamoClipId ?? 'none'} />
+                  <DirectiveItem label="Mixamo Weight" value={`${Math.round((avatarMotionDebug.mixamoWeight ?? 0) * 100)}%`} />
                   <DirectiveItem label="Reaction" value={`${Math.round(avatarMotionDebug.reactionWeight * 100)}%`} />
                   <DirectiveItem label="Bridge" value={`${Math.round(avatarMotionDebug.bridgeProgress * 100)}%`} />
                   <DirectiveItem label="坐姿安全" value={avatarMotionDebug.seatedSafety} />
