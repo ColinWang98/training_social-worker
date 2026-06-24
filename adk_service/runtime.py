@@ -1915,6 +1915,7 @@ class AvatarDirectorAgent(ManagedAgent):
             "expressionWeights": policy["expressionWeights"],
             "intensity": policy["intensity"],
             "performancePlan": policy["performancePlan"],
+            "expressionPlan": policy["expressionPlan"],
             "basis": policy["basis"],
         }
         if policy.get("overriddenFromModel"):
@@ -4040,6 +4041,274 @@ def expression_preset_for_affect(affect: str) -> str:
     return mapping.get(affect, "neutral")
 
 
+EXPRESSION_TEMPLATES: dict[str, dict[str, Any]] = {
+    "neutral_listening": {
+        "family": "soft_engagement",
+        "semanticTags": ["baseline", "listening", "low_intensity"],
+        "mouthPolicy": "emotion_mouth_allowed",
+        "fallbackAffect": "neutral",
+        "arkitWeights": {"mouthClose": 0.06, "browInnerUp": 0.04},
+        "vrmExpressionWeights": {"neutral": 0.14},
+        "intensityRange": (0.22, 0.48),
+        "riskSafe": True,
+        "rationale": "未見明確情緒轉折時只維持低幅度聆聽表情，避免每輪都像強烈反應。",
+    },
+    "defensive_micro": {
+        "family": "defensive",
+        "semanticTags": ["rupture", "defensive", "guarded"],
+        "mouthPolicy": "viseme_priority",
+        "fallbackAffect": "defensive",
+        "arkitWeights": {
+            "browDownLeft": 0.42,
+            "browDownRight": 0.42,
+            "eyeSquintLeft": 0.18,
+            "eyeSquintRight": 0.18,
+            "mouthPressLeft": 0.18,
+            "mouthPressRight": 0.18,
+            "mouthFrownLeft": 0.1,
+            "mouthFrownRight": 0.1,
+        },
+        "vrmExpressionWeights": {"angry": 0.34, "sad": 0.12},
+        "intensityRange": (0.5, 0.88),
+        "riskSafe": True,
+        "rationale": "被嘲笑、否定或強防衛時以眉眼收緊和輕微壓嘴呈現關係破裂，不讓嘴部阻礙說話口型。",
+    },
+    "guarded_repair": {
+        "family": "defensive",
+        "semanticTags": ["repair", "guarded", "avoidance"],
+        "mouthPolicy": "viseme_priority",
+        "fallbackAffect": "defensive",
+        "arkitWeights": {
+            "browDownLeft": 0.18,
+            "browDownRight": 0.18,
+            "eyeSquintLeft": 0.12,
+            "eyeSquintRight": 0.12,
+            "eyeLookDownLeft": 0.16,
+            "eyeLookDownRight": 0.16,
+            "mouthPressLeft": 0.12,
+            "mouthPressRight": 0.12,
+        },
+        "vrmExpressionWeights": {"angry": 0.18, "sad": 0.12},
+        "intensityRange": (0.34, 0.62),
+        "riskSafe": True,
+        "rationale": "道歉後只小幅修復，服務對象仍保持戒備和避眼，不即時回到中性或放鬆。",
+    },
+    "ashamed_downcast": {
+        "family": "ashamed",
+        "semanticTags": ["shame", "low_self_worth", "downcast"],
+        "mouthPolicy": "viseme_priority",
+        "fallbackAffect": "ashamed",
+        "arkitWeights": {
+            "browInnerUp": 0.3,
+            "eyeLookDownLeft": 0.28,
+            "eyeLookDownRight": 0.28,
+            "eyeSquintLeft": 0.08,
+            "eyeSquintRight": 0.08,
+            "mouthPressLeft": 0.18,
+            "mouthPressRight": 0.18,
+            "mouthFrownLeft": 0.14,
+            "mouthFrownRight": 0.14,
+        },
+        "vrmExpressionWeights": {"sad": 0.42, "relaxed": 0.06},
+        "intensityRange": (0.42, 0.72),
+        "riskSafe": True,
+        "rationale": "羞恥或低自我價值以低頭、眉內收和低幅壓嘴呈現，比誇張表情更符合訪談情境。",
+    },
+    "anxious_tension": {
+        "family": "anxious",
+        "semanticTags": ["anxiety", "tension", "uncertainty"],
+        "mouthPolicy": "viseme_priority",
+        "fallbackAffect": "anxious",
+        "arkitWeights": {
+            "browInnerUp": 0.32,
+            "eyeWideLeft": 0.18,
+            "eyeWideRight": 0.18,
+            "mouthStretchLeft": 0.14,
+            "mouthStretchRight": 0.14,
+            "mouthPressLeft": 0.1,
+            "mouthPressRight": 0.1,
+        },
+        "vrmExpressionWeights": {"sad": 0.32, "surprised": 0.18},
+        "intensityRange": (0.42, 0.72),
+        "riskSafe": True,
+        "rationale": "焦慮以眉內上提、眼部緊張和低幅嘴部拉伸呈現，保留可說話的嘴型空間。",
+    },
+    "reflective_soft": {
+        "family": "reflective",
+        "semanticTags": ["reflection", "change_talk", "soft_engagement"],
+        "mouthPolicy": "emotion_mouth_allowed",
+        "fallbackAffect": "reflective",
+        "arkitWeights": {
+            "browInnerUp": 0.12,
+            "mouthClose": 0.06,
+            "mouthSmileLeft": 0.05,
+            "mouthSmileRight": 0.05,
+        },
+        "vrmExpressionWeights": {"relaxed": 0.34},
+        "intensityRange": (0.34, 0.62),
+        "riskSafe": True,
+        "rationale": "反思或改變語言用柔和眉眼和微放鬆呈現，不把短暫合作誇大成完全放鬆。",
+    },
+    "risk_low_intensity": {
+        "family": "risk",
+        "semanticTags": ["risk", "safety", "low_intensity"],
+        "mouthPolicy": "risk_suppressed",
+        "fallbackAffect": "withdrawn",
+        "arkitWeights": {
+            "browInnerUp": 0.26,
+            "eyeLookDownLeft": 0.3,
+            "eyeLookDownRight": 0.3,
+            "eyeSquintLeft": 0.08,
+            "eyeSquintRight": 0.08,
+            "mouthFrownLeft": 0.1,
+            "mouthFrownRight": 0.1,
+        },
+        "vrmExpressionWeights": {"sad": 0.34, "relaxed": 0.08},
+        "intensityRange": (0.28, 0.52),
+        "riskSafe": True,
+        "rationale": "高風險語言只用低幅度退縮和低頭眉眼，避免把危機內容表演得戲劇化。",
+    },
+}
+
+
+def context_expression_policy(
+    response: dict[str, Any],
+    case_profile: dict[str, Any],
+    student_analysis: dict[str, bool],
+    risk_signals: list[str],
+    affect: str,
+    intensity: float,
+    basis: list[dict[str, Any]],
+    performance_plan: dict[str, Any],
+) -> dict[str, Any]:
+    adaptive_policy = response.get("adaptivePolicySnapshot") or {}
+    session_continuity = response.get("sessionContinuitySnapshot") or {}
+    realism = response.get("realismAssessment") or {}
+    rule_ids = {str(item.get("ruleId", "")) for item in basis}
+    high_risk = bool(
+        set(risk_signals)
+        & {"passive_self_harm_language", "substance_withdrawal", "violence_risk", "safety_review_repaired"}
+    )
+    rupture_events = session_continuity.get("ruptureEvents", []) if isinstance(session_continuity, dict) else []
+    repair_attempts = session_continuity.get("repairAttempts", []) if isinstance(session_continuity, dict) else []
+    response_constraints = adaptive_policy.get("responseStyleConstraints", []) if isinstance(adaptive_policy, dict) else []
+    matched_anchors = realism.get("matchedRealismAnchors", []) if isinstance(realism, dict) else []
+    case_baseline = (case_profile.get("avatarBaseline") or {}).get("baselineMood") if isinstance(case_profile, dict) else None
+
+    template_id = "neutral_listening"
+    rule_id = "context_expression_neutral_listening"
+    label = "Context Expression：低幅聆聽"
+    signals = [f"affect:{affect}", f"baseline:{case_baseline or 'unknown'}"]
+
+    if high_risk or "safety_low_intensity" in rule_ids:
+        template_id = "risk_low_intensity"
+        rule_id = "context_expression_risk_low_intensity"
+        label = "Context Expression：高風險低幅度"
+        signals = [*risk_signals, "priority:safety"]
+    elif student_analysis.get("mockingOrDismissive") or rule_ids & {
+        "mocked_or_dismissed_recoil",
+        "judgmental_directive_guard",
+        "defensive_resistance_high",
+    }:
+        template_id = "defensive_micro"
+        rule_id = "context_expression_rupture_defensive"
+        label = "Context Expression：關係破裂防衛"
+        signals = unique_strings([
+            "studentMove:mockingOrDismissive" if student_analysis.get("mockingOrDismissive") else "",
+            "studentMove:judgmentalOrDirective" if student_analysis.get("judgmentalOrDirective") else "",
+            *rupture_events,
+            f"affect:{affect}",
+        ])
+    elif student_analysis.get("apologyRepair") or "apology_repair_guarded" in rule_ids or repair_attempts:
+        template_id = "guarded_repair"
+        rule_id = "context_expression_guarded_repair"
+        label = "Context Expression：道歉後戒備修復"
+        signals = unique_strings(["studentMove:apologyRepair", *repair_attempts, *rupture_events, f"affect:{affect}"])
+    elif "shame_low_self_worth" in rule_ids or affect == "ashamed" or "shame" in response_constraints:
+        template_id = "ashamed_downcast"
+        rule_id = "context_expression_shame_downcast"
+        label = "Context Expression：羞恥低頭"
+        signals = unique_strings([f"affect:{affect}", "selfWorth:low", *matched_anchors[:3]])
+    elif affect == "anxious" or "anxious_withdrawal_fear" in rule_ids or "anxious_general_avoidance" in rule_ids:
+        template_id = "anxious_tension"
+        rule_id = "context_expression_anxious_tension"
+        label = "Context Expression：焦慮緊張"
+        signals = unique_strings([f"affect:{affect}", *risk_signals, *matched_anchors[:3]])
+    elif affect == "reflective" or "reflective_change_talk" in rule_ids or response.get("changeTalk"):
+        template_id = "reflective_soft"
+        rule_id = "context_expression_reflective_soft"
+        label = "Context Expression：反思微放鬆"
+        signals = unique_strings([f"affect:{affect}", f"changeTalk:{len(response.get('changeTalk') or [])}"])
+    elif affect in {"withdrawn", "sad"} or "withdrawn_social_isolation" in rule_ids:
+        template_id = "ashamed_downcast" if case_baseline in {"ashamed", "withdrawn", "sad"} else "neutral_listening"
+        rule_id = "context_expression_withdrawn_baseline"
+        label = "Context Expression：退縮基準"
+        signals = unique_strings([f"affect:{affect}", f"baseline:{case_baseline or 'unknown'}", *matched_anchors[:3]])
+
+    template = EXPRESSION_TEMPLATES[template_id]
+    min_intensity, max_intensity = template["intensityRange"]
+    expression_intensity = round(min(max_intensity, max(min_intensity, intensity)), 2)
+    if high_risk:
+        expression_intensity = round(min(expression_intensity, 0.5), 2)
+
+    timeline = expression_timeline_for_template(template_id, expression_intensity)
+    performance_plan["expressionTimeline"] = [
+        {
+            "phase": item["phase"],
+            "profile": template["fallbackAffect"],
+            "weight": item["weight"],
+        }
+        for item in timeline
+    ]
+    expression_basis = {
+        "ruleId": rule_id,
+        "label": label,
+        "sourceType": "expression_rule",
+        "signals": unique_strings([str(item) for item in signals if item])[:8],
+        "rationale": template["rationale"],
+    }
+    plan = {
+        "templateId": template_id,
+        "family": template["family"],
+        "intensity": expression_intensity,
+        "timeline": timeline,
+        "mouthPolicy": template["mouthPolicy"],
+        "avatarProfileId": "runtime_avatar_lip_profile",
+        "semanticTags": template["semanticTags"],
+        "arkitWeights": template["arkitWeights"],
+        "vrmExpressionWeights": scale_numeric_dict(template["vrmExpressionWeights"], expression_intensity),
+        "contextSignals": expression_basis["signals"],
+        "rationale": template["rationale"],
+    }
+    return {
+        "plan": plan,
+        "basis": expression_basis,
+        "expressionWeights": plan["vrmExpressionWeights"],
+        "expressionPreset": expression_preset_for_affect(template["fallbackAffect"]),
+    }
+
+
+def expression_timeline_for_template(template_id: str, intensity: float) -> list[dict[str, Any]]:
+    strong = template_id in {"defensive_micro", "risk_low_intensity"}
+    guarded = template_id in {"guarded_repair", "ashamed_downcast", "anxious_tension"}
+    if strong:
+        weights = (0.9, 0.7, 0.32, 0.12)
+    elif guarded:
+        weights = (0.68, 0.46, 0.24, 0.1)
+    else:
+        weights = (0.42, 0.28, 0.16, 0.08)
+    return [
+        {"phase": "attack", "weight": round(weights[0] * intensity, 3), "durationMs": 360 if strong else 520},
+        {"phase": "hold", "weight": round(weights[1] * intensity, 3)},
+        {"phase": "release", "weight": round(weights[2] * intensity, 3), "durationMs": 900 if guarded else 650},
+        {"phase": "idle", "weight": round(weights[3] * intensity, 3)},
+    ]
+
+
+def scale_numeric_dict(values: dict[str, float], scale: float) -> dict[str, float]:
+    return {key: round(min(1, max(0, value * scale)), 3) for key, value in values.items()}
+
+
 def avatar_behavior_policy(
     response: dict[str, Any],
     case_profile: dict[str, Any],
@@ -4271,13 +4540,24 @@ def avatar_behavior_policy(
         basis=basis,
         transition_ms=transition_ms,
     )
+    expression_policy = context_expression_policy(
+        response=response,
+        case_profile=case_profile,
+        student_analysis=student_analysis,
+        risk_signals=risk_signals,
+        affect=affect,
+        intensity=intensity,
+        basis=basis,
+        performance_plan=performance_plan,
+    )
+    basis.append(expression_policy["basis"])
 
     return {
         "affect": affect,
         "motionCue": motion,
         "voiceStyle": voice_style_for_affect(affect),
-        "expressionPreset": expression_preset_for_affect(affect),
-        "expressionWeights": expression_weights_for_affect(affect, intensity),
+        "expressionPreset": expression_policy["expressionPreset"],
+        "expressionWeights": expression_policy["expressionWeights"],
         "intensity": round(intensity, 2),
         "baselineMood": affect,
         "gesture": motion,
@@ -4285,6 +4565,7 @@ def avatar_behavior_policy(
         "holdMs": hold_ms,
         "priority": priority,
         "performancePlan": performance_plan,
+        "expressionPlan": expression_policy["plan"],
         "basis": basis,
         "overriddenFromModel": overridden or None,
     }

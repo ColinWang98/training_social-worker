@@ -13,8 +13,41 @@ export type AvatarAsset = {
   redistribution: string;
   localUseNote: string;
   expressionSupport: 'arkit52' | 'vrm0' | 'none';
+  lipSyncProfile: AvatarLipSyncProfile;
   ttsVoice?: string;
   ttsVoiceLabel?: string;
+};
+
+export type AvatarLipSyncProfile = {
+  id: 'john-do-vroid' | 'streamoji-conservative' | 'generic';
+  mouthScale: number;
+  emotionMouthSuppressionWhileSpeaking: number;
+  jawOpenMax: number;
+  mouthCloseMax: number;
+};
+
+export const avatarLipSyncProfiles: Record<AvatarLipSyncProfile['id'], AvatarLipSyncProfile> = {
+  'john-do-vroid': {
+    id: 'john-do-vroid',
+    mouthScale: 1,
+    emotionMouthSuppressionWhileSpeaking: 0.85,
+    jawOpenMax: 0.78,
+    mouthCloseMax: 0.55,
+  },
+  'streamoji-conservative': {
+    id: 'streamoji-conservative',
+    mouthScale: 0.72,
+    emotionMouthSuppressionWhileSpeaking: 0.25,
+    jawOpenMax: 0.46,
+    mouthCloseMax: 0.22,
+  },
+  generic: {
+    id: 'generic',
+    mouthScale: 0.78,
+    emotionMouthSuppressionWhileSpeaking: 0.5,
+    jawOpenMax: 0.55,
+    mouthCloseMax: 0.32,
+  },
 };
 
 export const DEFAULT_AVATAR_ID = 'john-do-arkit';
@@ -35,6 +68,7 @@ export const avatarAssets: AvatarAsset[] = [
     redistribution: 'Local prototype testing only unless Streamoji account/license terms allow redistribution.',
     localUseNote: '普通 GLB 候選；支援 ARKit 52 blendshape，VRM 坐姿骨骼 runtime 不適用。',
     expressionSupport: 'arkit52',
+    lipSyncProfile: avatarLipSyncProfiles['streamoji-conservative'],
     ttsVoiceLabel: '環境預設粵語聲線',
   },
   {
@@ -52,6 +86,7 @@ export const avatarAssets: AvatarAsset[] = [
     redistribution: 'Redistribution is allowed by embedded URL, but modification and commercial use are disallowed.',
     localUseNote: '只限本地原型驗證使用。',
     expressionSupport: 'vrm0',
+    lipSyncProfile: avatarLipSyncProfiles.generic,
     ttsVoiceLabel: '環境預設粵語聲線',
   },
   {
@@ -69,6 +104,7 @@ export const avatarAssets: AvatarAsset[] = [
     redistribution: 'Do not redistribute outside the local prototype until licensing is clarified.',
     localUseNote: 'ARKit 52 blendshape 測試模型。',
     expressionSupport: 'arkit52',
+    lipSyncProfile: avatarLipSyncProfiles['john-do-vroid'],
     ttsVoiceLabel: '環境預設粵語聲線',
   },
 ];

@@ -24,6 +24,8 @@
     "mixamo:validate": "node scripts/validate-mixamo-clip.mjs",
     "mixamo:runtime:test": "node scripts/validate-mixamo-runtime.mjs",
     "avatar:motion:test": "node scripts/validate-seated-motion.mjs",
+    "avatar:lip:test": "node scripts/validate-avatar-lipsync.mjs",
+    "avatar:expression:test": "python3 scripts/expression-policy-test.py",
     "vrm:arkit": "node scripts/generate-arkit-proxy-vrm.mjs",
     "vrm:inspect": "node scripts/inspect-vrm-blendshapes.mjs",
     "supabase:import": ".venv-adk/bin/python scripts/import-sqlite-corpus-to-supabase.py",

@@ -115,9 +115,27 @@ export type EvidenceSummary = {
 export type AvatarBehaviorBasis = {
   ruleId: string;
   label: string;
-  sourceType: 'rule' | 'corpus' | 'supervisor' | 'safety' | 'realism_anchor';
+  sourceType: 'rule' | 'expression_rule' | 'corpus' | 'supervisor' | 'safety' | 'realism_anchor';
   signals: string[];
   rationale: string;
+};
+
+export type AvatarExpressionPlan = {
+  templateId: string;
+  family: string;
+  intensity: number;
+  timeline: {
+    phase: 'attack' | 'hold' | 'release' | 'idle';
+    weight: number;
+    durationMs?: number;
+  }[];
+  mouthPolicy: 'viseme_priority' | 'emotion_mouth_allowed' | 'risk_suppressed';
+  avatarProfileId?: string;
+  semanticTags?: string[];
+  arkitWeights?: Partial<Record<string, number>>;
+  vrmExpressionWeights?: Partial<Record<string, number>>;
+  contextSignals?: string[];
+  rationale?: string;
 };
 
 export type AvatarPerformancePlan = {
@@ -431,6 +449,7 @@ export type ClientResponse = {
     expressionWeights?: Partial<Record<string, number>>;
     intensity?: number;
     performancePlan?: AvatarPerformancePlan;
+    expressionPlan?: AvatarExpressionPlan;
     basis?: AvatarBehaviorBasis[];
     overriddenFromModel?: {
       affect?: string;

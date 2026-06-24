@@ -11,6 +11,7 @@ import {
 import {
   ArkitBlendshapeName,
   ArkitBlendshapeWeights,
+  AvatarLipSyncProfile,
   ExpressionWeights,
 } from '../lib/avatarConfig';
 import {
@@ -22,6 +23,7 @@ import {
 } from '../lib/arkitExpressions';
 import {
   AffectLabel,
+  AvatarExpressionPlan,
   AvatarDirectivePriority,
   AvatarGazePattern,
   AvatarPerformancePlan,
@@ -66,6 +68,7 @@ type VrmStageProps = {
   avatarLabel?: string;
   expressionWeights: ExpressionWeights;
   expressionProfile?: AffectLabel;
+  expressionPlan?: AvatarExpressionPlan;
   motionIntensity: number;
   motionCue: MotionCue;
   caseBaselineMood?: AffectLabel;
@@ -85,8 +88,11 @@ type VrmStageProps = {
     startedAtMs: number;
     durationMs: number;
     active: boolean;
+    clockSource: 'audio' | 'timer' | 'none';
+    audioCurrentTimeMs?: number;
     lipSync?: LipSyncTimeline;
   };
+  lipSyncProfile: AvatarLipSyncProfile;
   autoBlink: boolean;
   vrmaFile: File | null;
   onStatusChange: (status: StageStatus) => void;
@@ -98,6 +104,7 @@ export function VrmStage({
   avatarLabel,
   expressionWeights,
   expressionProfile,
+  expressionPlan,
   motionIntensity,
   motionCue,
   caseBaselineMood,
@@ -113,6 +120,7 @@ export function VrmStage({
   reactionKey,
   speechLevel,
   visemePlayback,
+  lipSyncProfile,
   autoBlink,
   vrmaFile,
   onStatusChange,
@@ -128,8 +136,10 @@ export function VrmStage({
   const expressionRef = useRef(expressionWeights);
   const currentExpressionRef = useRef<ExpressionWeights>({});
   const expressionProfileRef = useRef<AffectLabel | undefined>(expressionProfile);
+  const expressionPlanRef = useRef<AvatarExpressionPlan | undefined>(expressionPlan);
   const arkitControllerRef = useRef<ReturnType<typeof createMorphTargetExpressionController> | null>(null);
   const visemePlaybackRef = useRef(visemePlayback);
+  const lipSyncProfileRef = useRef(lipSyncProfile);
   const currentMouthRef = useRef(0);
   const motionIntensityRef = useRef(motionIntensity);
   const motionCueRef = useRef<MotionCue>(motionCue);
@@ -176,8 +186,16 @@ export function VrmStage({
   }, [expressionProfile]);
 
   useEffect(() => {
+    expressionPlanRef.current = expressionPlan;
+  }, [expressionPlan]);
+
+  useEffect(() => {
     visemePlaybackRef.current = visemePlayback;
   }, [visemePlayback]);
+
+  useEffect(() => {
+    lipSyncProfileRef.current = lipSyncProfile;
+  }, [lipSyncProfile]);
 
   useEffect(() => {
     motionCueRef.current = motionCue;
@@ -565,17 +583,32 @@ export function VrmStage({
       if (arkitController) {
         const playback = visemePlaybackRef.current;
         const profile = expressionProfileRef.current ?? 'neutral';
-        const profileWeights = expressionProfileForAffect(profile, expressionRef.current, motionIntensityRef.current);
+        const activeExpressionPlan = expressionPlanRef.current;
+        const baselineProfile = caseBaselineMoodRef.current ?? profile;
+        const baselineWeights = expressionProfileForAffect(
+          baselineProfile,
+          {},
+          Math.min(0.42, Math.max(0.22, caseIdleIntensityRef.current * 0.3)),
+        );
+        const profileWeights = activeExpressionPlan?.arkitWeights
+          ? expressionPlanWeights(activeExpressionPlan, motionExpressionOverlayRef.current.phase)
+          : expressionProfileForAffect(profile, expressionRef.current, motionIntensityRef.current);
         const rhubarbTimeline = playback.active ? buildRhubarbVisemeTimeline(playback.lipSync) : [];
         const timeline = playback.active
           ? rhubarbTimeline.length > 0
             ? rhubarbTimeline
             : buildCantoneseVisemeTimeline(playback.text, playback.durationMs)
           : [];
+        const visemeElapsedMs = playback.clockSource === 'audio'
+          ? playback.audioCurrentTimeMs ?? 0
+          : playback.active
+            ? performance.now() - playback.startedAtMs
+            : 0;
         const viseme = visemeWeightsForTime(
           timeline,
-          performance.now() - playback.startedAtMs,
+          visemeElapsedMs,
           speechLevelRef.current,
+          { active: playback.active, minVisibleScale: 0.12 },
         );
         const blink =
           autoBlinkRef.current && blinkStrength > 0
@@ -585,7 +618,16 @@ export function VrmStage({
             }
             : {};
         const motionOverlay = motionExpressionOverlayRef.current;
-        const arkitWeights = mergeArkitWeights(profileWeights, motionOverlay.weights, viseme.weights, blink);
+        const lipProfile = lipSyncProfileRef.current;
+        const speaking = playback.active && timeline.length > 0;
+        const mouthPolicy = activeExpressionPlan?.mouthPolicy ?? 'viseme_priority';
+        const arkitWeights = mergeArkitWeights(
+          suppressEmotionMouthWeights(baselineWeights, speaking, lipProfile, mouthPolicy),
+          suppressEmotionMouthWeights(profileWeights, speaking, lipProfile, mouthPolicy),
+          suppressEmotionMouthWeights(motionOverlay.weights, speaking, lipProfile, mouthPolicy),
+          applyLipSyncProfile(viseme.weights, lipProfile),
+          blink,
+        );
         arkitController.apply(arkitWeights, delta);
         if (elapsed - lastArkitDebugAtRef.current > 1.5) {
           lastArkitDebugAtRef.current = elapsed;
@@ -602,6 +644,14 @@ export function VrmStage({
               viseme.activeViseme,
               viseme.activeChar,
               arkitWeights,
+              {
+                clockSource: playback.clockSource,
+                visemeElapsedMs,
+                timelineEndMs: timelineEndMs(timeline),
+                activeLipProfile: lipProfile.id,
+                expressionTemplateId: activeExpressionPlan?.templateId,
+                mouthPolicy,
+              },
             ),
           });
         }
@@ -2095,9 +2145,11 @@ function createMorphTargetExpressionController(scene: THREE.Object3D, modelPath:
     mesh: THREE.Mesh;
     dictionary: Record<string, number>;
     influences: number[];
+    enabledNames: Set<string>;
   }> = [];
   const current: Record<string, number> = {};
   const arkitNames = new Set<string>();
+  let drivenMouthTargetCount = 0;
 
   scene.traverse((object) => {
     const mesh = object as THREE.Mesh & {
@@ -2106,19 +2158,28 @@ function createMorphTargetExpressionController(scene: THREE.Object3D, modelPath:
     };
     if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
     const dictionary = mesh.morphTargetDictionary;
+    const enabledNames = new Set<string>();
     Object.keys(dictionary).forEach((name) => {
-      if (isArkitName(name)) arkitNames.add(name);
+      if (!isArkitName(name)) return;
+      arkitNames.add(name);
+      const enabled = !isMouthArkitName(name) || morphTargetHasPositionDelta(mesh, dictionary[name]);
+      if (enabled) {
+        enabledNames.add(name);
+        if (isMouthArkitName(name)) drivenMouthTargetCount += 1;
+      }
     });
     targets.push({
       mesh,
       dictionary,
       influences: mesh.morphTargetInfluences,
+      enabledNames,
     });
   });
 
   return {
     modelPath,
     arkitTargetCount: arkitNames.size,
+    drivenMouthTargetCount,
     apply(nextWeights: ArkitBlendshapeWeights, delta: number) {
       const names = new Set([...Object.keys(current), ...Object.keys(nextWeights)]);
       names.forEach((name) => {
@@ -2127,7 +2188,8 @@ function createMorphTargetExpressionController(scene: THREE.Object3D, modelPath:
         const previous = clampExpression(current[name] ?? 0);
         const next = dampValue(previous, target, delta, expressionTimeConstant(name, target > previous));
         current[name] = next;
-        targets.forEach(({ dictionary, influences }) => {
+        targets.forEach(({ dictionary, influences, enabledNames }) => {
+          if (!enabledNames.has(name)) return;
           const index = dictionary[name];
           if (typeof index === 'number') influences[index] = next;
         });
@@ -2145,6 +2207,65 @@ function mergeArkitWeights(...layers: ArkitBlendshapeWeights[]): ArkitBlendshape
     });
   });
   return merged as ArkitBlendshapeWeights;
+}
+
+function suppressEmotionMouthWeights(
+  weights: ArkitBlendshapeWeights,
+  speaking: boolean,
+  lipProfile: AvatarLipSyncProfile,
+  mouthPolicy: AvatarExpressionPlan['mouthPolicy'],
+): ArkitBlendshapeWeights {
+  if (!speaking) return weights;
+  const policyMultiplier = mouthPolicy === 'risk_suppressed'
+    ? 0.12
+    : mouthPolicy === 'emotion_mouth_allowed'
+      ? 0.68
+      : lipProfile.emotionMouthSuppressionWhileSpeaking;
+  const next: ArkitBlendshapeWeights = {};
+  Object.entries(weights).forEach(([name, value]) => {
+    next[name as ArkitBlendshapeName] = isMouthArkitName(name)
+      ? clampExpression((value ?? 0) * policyMultiplier)
+      : clampExpression(value ?? 0);
+  });
+  return next;
+}
+
+function expressionPlanWeights(
+  expressionPlan: AvatarExpressionPlan,
+  phase: string,
+): ArkitBlendshapeWeights {
+  const templateWeights = expressionPlan.arkitWeights ?? {};
+  const phaseWeight = expressionPlan.timeline.find((item) => item.phase === phase)?.weight
+    ?? expressionPlan.timeline.find((item) => item.phase === 'idle')?.weight
+    ?? expressionPlan.intensity
+    ?? 0.5;
+  const scale = clampExpression(phaseWeight);
+  const next: ArkitBlendshapeWeights = {};
+  Object.entries(templateWeights).forEach(([name, value]) => {
+    if (!isArkitName(name)) return;
+    next[name] = clampExpression((value ?? 0) * scale);
+  });
+  return next;
+}
+
+function applyLipSyncProfile(
+  weights: ArkitBlendshapeWeights,
+  lipProfile: AvatarLipSyncProfile,
+): ArkitBlendshapeWeights {
+  const next: ArkitBlendshapeWeights = {};
+  Object.entries(weights).forEach(([name, value]) => {
+    const scaled = isMouthArkitName(name) ? (value ?? 0) * lipProfile.mouthScale : value ?? 0;
+    let clamped = clampExpression(scaled);
+    if (name === 'jawOpen') clamped = Math.min(clamped, lipProfile.jawOpenMax);
+    if (name === 'mouthClose') clamped = Math.min(clamped, lipProfile.mouthCloseMax);
+    next[name as ArkitBlendshapeName] = clamped;
+  });
+  return next;
+}
+
+function timelineEndMs(timeline: Array<{ atMs: number; durationMs: number }>) {
+  const last = timeline[timeline.length - 1];
+  return last ? Math.max(0, last.atMs + last.durationMs) : 0;
 }
 
 function expressionOverlayForPerformance(
@@ -2248,6 +2369,14 @@ function arkitDebugSnapshot(
   activeViseme: CantoneseViseme | 'none',
   activeVisemeChar: string,
   weights: ArkitBlendshapeWeights,
+  lipSync: {
+    clockSource?: 'audio' | 'timer' | 'none';
+    visemeElapsedMs?: number;
+    timelineEndMs?: number;
+    activeLipProfile?: string;
+    expressionTemplateId?: string;
+    mouthPolicy?: string;
+  } = {},
 ): AvatarBlendshapeDebug {
   return {
     modelPath,
@@ -2256,6 +2385,13 @@ function arkitDebugSnapshot(
     activeExpressionProfile,
     activeViseme,
     activeVisemeChar,
+    clockSource: lipSync.clockSource ?? 'none',
+    visemeElapsedMs: Math.max(0, lipSync.visemeElapsedMs ?? 0),
+    timelineEndMs: Math.max(0, lipSync.timelineEndMs ?? 0),
+    activeLipProfile: lipSync.activeLipProfile ?? 'unknown',
+    expressionTemplateId: lipSync.expressionTemplateId,
+    mouthPolicy: lipSync.mouthPolicy,
+    drivenMouthTargetCount: controller.drivenMouthTargetCount,
     mouthWeight: maxWeight(weights, /^(jaw|mouth|tongue)/),
     browWeight: maxWeight(weights, /^brow/),
     eyeWeight: maxWeight(weights, /^(eye|cheek)/),
@@ -2271,6 +2407,24 @@ function maxWeight(weights: ArkitBlendshapeWeights, pattern: RegExp) {
 
 function isArkitName(name: string): name is ArkitBlendshapeName {
   return ARKIT_NAME_SET.has(name as ArkitBlendshapeName);
+}
+
+function isMouthArkitName(name: string) {
+  return /^(jaw|mouth|tongue)/.test(name);
+}
+
+function morphTargetHasPositionDelta(mesh: THREE.Mesh, index: number) {
+  const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+  const attribute = geometry?.morphAttributes?.position?.[index];
+  if (!attribute || typeof attribute.count !== 'number' || attribute.count <= 0) return false;
+  const step = Math.max(1, Math.floor(attribute.count / 96));
+  for (let i = 0; i < attribute.count; i += step) {
+    if (Math.abs(attribute.getX(i)) + Math.abs(attribute.getY(i)) + Math.abs(attribute.getZ(i)) > 1e-6) {
+      return true;
+    }
+  }
+  const last = attribute.count - 1;
+  return Math.abs(attribute.getX(last)) + Math.abs(attribute.getY(last)) + Math.abs(attribute.getZ(last)) > 1e-6;
 }
 
 function dampValue(current: number, target: number, delta: number, timeConstant: number) {

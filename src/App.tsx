@@ -50,6 +50,13 @@ export type AvatarBlendshapeDebug = {
   activeExpressionProfile: string;
   activeViseme: string;
   activeVisemeChar: string;
+  clockSource: 'audio' | 'timer' | 'none';
+  visemeElapsedMs: number;
+  timelineEndMs: number;
+  activeLipProfile: string;
+  expressionTemplateId?: string;
+  mouthPolicy?: string;
+  drivenMouthTargetCount: number;
   mouthWeight: number;
   browWeight: number;
   eyeWeight: number;
@@ -114,6 +121,8 @@ export default function App() {
     startedAtMs: 0,
     durationMs: 0,
     active: false,
+    clockSource: 'none' as 'audio' | 'timer' | 'none',
+    audioCurrentTimeMs: 0,
     lipSync: undefined as LipSyncTimeline | undefined,
   });
   const caseProfileRef = useRef(caseProfile);
@@ -199,7 +208,12 @@ export default function App() {
       playbackFrameRef.current = null;
     }
     setSpeechLevel(0);
-    setVisemePlayback((current) => ({ ...current, active: false }));
+    setVisemePlayback((current) => ({
+      ...current,
+      active: false,
+      clockSource: 'none',
+      audioCurrentTimeMs: 0,
+    }));
     setVoiceStatus((status) => {
       if (status !== 'avatar_speaking') return status;
       return wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle';
@@ -231,17 +245,19 @@ export default function App() {
         startedAtMs: performance.now(),
         durationMs: estimateSpeechDuration(text, responseLanguage),
         active: true,
+        clockSource: 'timer',
+        audioCurrentTimeMs: 0,
         lipSync: undefined,
       });
     };
     utterance.onend = () => {
       setSpeechLevel(0);
-      setVisemePlayback((current) => ({ ...current, active: false }));
+      setVisemePlayback((current) => ({ ...current, active: false, clockSource: 'none', audioCurrentTimeMs: 0 }));
       setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     utterance.onerror = () => {
       setSpeechLevel(0);
-      setVisemePlayback((current) => ({ ...current, active: false }));
+      setVisemePlayback((current) => ({ ...current, active: false, clockSource: 'none', audioCurrentTimeMs: 0 }));
       setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     window.speechSynthesis.speak(utterance);
@@ -255,6 +271,20 @@ export default function App() {
     audioElementRef.current = audio;
     bargeInSentRef.current = false;
     setVoiceStatus('avatar_speaking');
+    let lastVisemeClockUpdate = 0;
+    const syncAudioClock = (now: number) => {
+      if (now - lastVisemeClockUpdate < 33) return;
+      lastVisemeClockUpdate = now;
+      const currentTimeMs = Number.isFinite(audio.currentTime) ? audio.currentTime * 1000 : 0;
+      setVisemePlayback((current) => {
+        if (!current.active || current.clockSource !== 'audio') return current;
+        return { ...current, audioCurrentTimeMs: currentTimeMs };
+      });
+    };
+    const updateClockOnly = () => {
+      syncAudioClock(performance.now());
+      playbackFrameRef.current = requestAnimationFrame(updateClockOnly);
+    };
 
     try {
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -271,12 +301,16 @@ export default function App() {
           analyser.getByteFrequencyData(data);
           const average = data.reduce((sum, value) => sum + value, 0) / Math.max(data.length, 1);
           setSpeechLevel(Math.min(1, Math.max(0, average / 90)));
+          syncAudioClock(performance.now());
           playbackFrameRef.current = requestAnimationFrame(updateLevel);
         };
         updateLevel();
+      } else {
+        updateClockOnly();
       }
     } catch {
       setSpeechLevel(0.55);
+      updateClockOnly();
     }
 
     audio.onplay = () => {
@@ -287,6 +321,8 @@ export default function App() {
           ? audio.duration * 1000
           : estimateSpeechDuration(text, responseLanguage),
         active: true,
+        clockSource: 'audio',
+        audioCurrentTimeMs: Number.isFinite(audio.currentTime) ? audio.currentTime * 1000 : 0,
         lipSync: tts.lipSync,
       });
     };
@@ -792,6 +828,7 @@ export default function App() {
           motionIntensity={motionIntensity}
           motionCue={motionCue}
           expressionProfile={latestClientResponse?.avatarDirective?.affect ?? caseProfile.avatarBaseline.baselineMood}
+          expressionPlan={latestClientResponse?.avatarDirective?.expressionPlan}
           caseBaselineMood={caseProfile.avatarBaseline.baselineMood}
           caseRestingCue={caseProfile.avatarBaseline.restingCue}
           caseGazePattern={caseProfile.avatarBaseline.gazePattern}
@@ -805,6 +842,7 @@ export default function App() {
           reactionKey={reactionKey}
           speechLevel={speechLevel}
           visemePlayback={visemePlayback}
+          lipSyncProfile={selectedAvatar.lipSyncProfile}
           vrmaFile={vrmaFile}
           onStatusChange={handleStatusChange}
         />

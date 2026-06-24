@@ -64,15 +64,32 @@ export function visemeWeightsForTime(
   timeline: CantoneseVisemeFrame[],
   elapsedMs: number,
   speechLevel: number,
+  options: { active?: boolean; minVisibleScale?: number } = {},
 ): { weights: ArkitBlendshapeWeights; activeViseme: CantoneseViseme | 'none'; activeChar: string } {
-  if (timeline.length === 0 || speechLevel <= 0.02) {
+  if (timeline.length === 0 || options.active === false) {
     return { weights: {}, activeViseme: 'none', activeChar: '' };
   }
-  const frame = timeline.find((item) => elapsedMs >= item.atMs && elapsedMs < item.atMs + item.durationMs)
-    ?? timeline[timeline.length - 1];
+  const firstFrame = timeline[0];
+  const lastFrame = timeline[timeline.length - 1];
+  const timelineEndMs = lastFrame.atMs + lastFrame.durationMs;
+  if (elapsedMs > timelineEndMs + 40) {
+    return { weights: {}, activeViseme: 'none', activeChar: '' };
+  }
+  const frame = timeline.find((item) => elapsedMs >= item.atMs && elapsedMs < item.atMs + item.durationMs);
+  if (!frame) {
+    const restScale = Math.max(0.08, options.minVisibleScale ?? 0.14);
+    return {
+      weights: scaleWeights(visemeWeightMap.rest ?? {}, restScale),
+      activeViseme: elapsedMs < firstFrame.atMs ? 'rest' : 'none',
+      activeChar: '',
+    };
+  }
   const local = clamp((elapsedMs - frame.atMs) / Math.max(frame.durationMs, 1), 0, 1);
-  const envelope = Math.sin(local * Math.PI);
-  const scale = clamp(speechLevel, 0.05, 1) * (0.45 + envelope * 0.55);
+  const attack = clamp(local / 0.18, 0, 1);
+  const release = clamp((1 - local) / 0.22, 0, 1);
+  const envelope = smoothstep(Math.min(attack, release));
+  const speechModulation = 0.72 + clamp(speechLevel, 0, 1) * 0.28;
+  const scale = speechModulation * (0.52 + envelope * 0.48);
   return {
     weights: scaleWeights(visemeWeightMap[frame.viseme] ?? {}, scale),
     activeViseme: frame.viseme,
@@ -117,6 +134,11 @@ function charDurationUnit(char: string) {
 function clamp(value: number, min = 0, max = 1) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function smoothstep(value: number) {
+  const x = clamp(value, 0, 1);
+  return x * x * (3 - 2 * x);
 }
 
 const profileMap: Record<string, ArkitBlendshapeWeights> = {

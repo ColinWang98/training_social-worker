@@ -192,6 +192,11 @@ def validate_turn(case_type: str, index: int, student_text: str, response: dict)
     directive = response.get("avatarDirective") or {}
     if not directive.get("basis"):
         raise RuntimeError(f"{case_type} round {index}: avatarDirective.basis is required")
+    expression_plan = directive.get("expressionPlan") or {}
+    if not expression_plan.get("templateId"):
+        raise RuntimeError(f"{case_type} round {index}: avatarDirective.expressionPlan.templateId is required")
+    if not any(item.get("sourceType") == "expression_rule" for item in directive.get("basis", [])):
+        raise RuntimeError(f"{case_type} round {index}: avatarDirective.basis must include expression_rule")
     if not isinstance(directive.get("intensity"), (int, float)):
         raise RuntimeError(f"{case_type} round {index}: avatar intensity must be numeric")
     if response.get("sessionContinuitySnapshot") is None:

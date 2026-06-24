@@ -96,6 +96,11 @@ async def main() -> None:
     basis = directive.get("basis") or []
     if not basis:
         raise RuntimeError("avatarDirective.basis must include at least one policy rule.")
+    expression_plan = directive.get("expressionPlan") or {}
+    if not expression_plan.get("templateId"):
+        raise RuntimeError("avatarDirective.expressionPlan.templateId is required.")
+    if not any(item.get("sourceType") == "expression_rule" for item in basis):
+        raise RuntimeError("avatarDirective.basis must include an expression_rule entry.")
     if not isinstance(directive.get("intensity"), (int, float)):
         raise RuntimeError("avatarDirective.intensity must be numeric.")
     if not isinstance(directive.get("transitionMs"), (int, float)):

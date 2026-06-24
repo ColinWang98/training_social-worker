@@ -475,8 +475,13 @@ export function CasePanel({
                 <div className="avatarDirectiveGrid">
                   <DirectiveItem label="ARKit 模型" value={avatarBlendshapeDebug.arkitAvailable ? 'on' : 'fallback'} />
                   <DirectiveItem label="ARKit targets" value={`${avatarBlendshapeDebug.arkitTargetCount}`} />
+                  <DirectiveItem label="Mouth targets" value={`${avatarBlendshapeDebug.drivenMouthTargetCount}`} />
                   <DirectiveItem label="模型" value={avatarBlendshapeDebug.modelPath} />
                   <DirectiveItem label="表情 Profile" value={avatarBlendshapeDebug.activeExpressionProfile} />
+                  <DirectiveItem label="Lip Profile" value={avatarBlendshapeDebug.activeLipProfile} />
+                  <DirectiveItem label="Expression Rule" value={avatarBlendshapeDebug.expressionTemplateId ?? 'fallback'} />
+                  <DirectiveItem label="Mouth Policy" value={avatarBlendshapeDebug.mouthPolicy ?? 'viseme_priority'} />
+                  <DirectiveItem label="Clock" value={avatarBlendshapeDebug.clockSource} />
                   <DirectiveItem
                     label="Viseme"
                     value={
@@ -484,6 +489,10 @@ export function CasePanel({
                         ? `${avatarBlendshapeDebug.activeViseme} (${avatarBlendshapeDebug.activeVisemeChar})`
                         : avatarBlendshapeDebug.activeViseme
                     }
+                  />
+                  <DirectiveItem
+                    label="Viseme ms"
+                    value={`${Math.round(avatarBlendshapeDebug.visemeElapsedMs)} / ${Math.round(avatarBlendshapeDebug.timelineEndMs)}`}
                   />
                   <DirectiveItem label="嘴部權重" value={`${Math.round(avatarBlendshapeDebug.mouthWeight * 100)}%`} />
                   <DirectiveItem label="眉部權重" value={`${Math.round(avatarBlendshapeDebug.browWeight * 100)}%`} />
@@ -575,6 +584,25 @@ export function CasePanel({
                     />
                   </div>
                 )}
+                {avatarDirective.expressionPlan && (
+                  <div className="avatarDirectiveGrid" aria-label="Avatar expression rule map">
+                    <DirectiveItem label="Expression Template" value={avatarDirective.expressionPlan.templateId} />
+                    <DirectiveItem label="Expression Family" value={avatarDirective.expressionPlan.family} />
+                    <DirectiveItem label="Mouth Policy" value={avatarDirective.expressionPlan.mouthPolicy} />
+                    <DirectiveItem label="Expression Intensity" value={`${Math.round(avatarDirective.expressionPlan.intensity * 100)}%`} />
+                    <DirectiveItem
+                      label="Timeline"
+                      value={avatarDirective.expressionPlan.timeline.map((item) => `${item.phase}:${Math.round(item.weight * 100)}%`).join(' · ')}
+                    />
+                    <DirectiveItem
+                      label="Tags"
+                      value={(avatarDirective.expressionPlan.semanticTags ?? []).join(', ') || 'n/a'}
+                    />
+                  </div>
+                )}
+                {avatarDirective.expressionPlan?.contextSignals?.length ? (
+                  <TagRow label="Expression signals" values={avatarDirective.expressionPlan.contextSignals} />
+                ) : null}
                 <DirectiveBasis
                   basis={avatarDirective.basis ?? []}
                   overriddenFromModel={avatarDirective.overriddenFromModel}
