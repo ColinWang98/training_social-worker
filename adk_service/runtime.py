@@ -421,6 +421,73 @@ def has_token_overlap(left: set[str], right: set[str]) -> bool:
     return any(token in right for token in left)
 
 
+PROGRESSION_STAGES = [
+    "initial_contact",
+    "presenting_issue",
+    "context_disclosure",
+    "risk_or_need_exploration",
+    "next_step_readiness",
+]
+
+PROGRESSION_DEPTH_BY_STAGE = {
+    "initial_contact": 1,
+    "presenting_issue": 1,
+    "context_disclosure": 2,
+    "risk_or_need_exploration": 3,
+    "next_step_readiness": 3,
+}
+
+
+def progression_snapshot(
+    case_profile: dict[str, Any],
+    student_analysis: dict[str, bool],
+    session_continuity: dict[str, Any],
+) -> dict[str, Any]:
+    trust_values = session_continuity.get("trustTrajectory") if isinstance(session_continuity, dict) else []
+    trust = trust_values[-1] if isinstance(trust_values, list) and trust_values else case_profile.get("psychologicalState", {}).get("clientOpenness", 0)
+    trust = clamp_float(trust, 0, 10)
+    disclosed = session_continuity.get("disclosedFactIds", []) if isinstance(session_continuity, dict) else []
+    ruptures = session_continuity.get("ruptureEvents", []) if isinstance(session_continuity, dict) else []
+    repairs = session_continuity.get("repairAttempts", []) if isinstance(session_continuity, dict) else []
+    current_rupture = bool(student_analysis.get("mockingOrDismissive") or student_analysis.get("judgmentalOrDirective") or student_analysis.get("prematureAdvice"))
+    unresolved_rupture = bool(ruptures) and not repairs
+    progression_paused = bool(current_rupture or (unresolved_rupture and not student_analysis.get("apologyRepair")))
+
+    stage = "initial_contact"
+    signals: list[str] = []
+    if student_analysis.get("riskExploration"):
+        stage = "risk_or_need_exploration"
+        signals.append("risk_exploration")
+    elif trust >= 5 or len(disclosed) >= 2:
+        stage = "context_disclosure"
+        signals.append("trust_or_disclosure_accumulated")
+    elif student_analysis.get("reflectiveListening") or len(disclosed) >= 1 or trust >= 3.5:
+        stage = "context_disclosure" if trust >= 4.5 else "presenting_issue"
+        signals.append("reflective_or_initial_disclosure")
+    elif student_analysis.get("openQuestion") or student_analysis.get("apologyRepair"):
+        stage = "presenting_issue"
+        signals.append("open_or_repair_invitation")
+
+    if progression_paused and stage not in {"risk_or_need_exploration"}:
+        stage = "initial_contact" if trust < 4 else "presenting_issue"
+        signals.append("progression_paused_by_rupture")
+
+    max_depth = PROGRESSION_DEPTH_BY_STAGE.get(stage, 1)
+    if student_analysis.get("minimalBackchannel"):
+        max_depth = min(max_depth, 1)
+        signals.append("minimal_backchannel_low_depth")
+    if progression_paused and not student_analysis.get("riskExploration"):
+        max_depth = min(max_depth, 1)
+
+    return {
+        "progressionStage": stage,
+        "progressionPaused": progression_paused,
+        "progressionSignals": unique_strings(signals),
+        "minFollowUpAffordance": "surface_cue" if not progression_paused else "emotional_reaction",
+        "maxDisclosureStep": max_depth,
+    }
+
+
 def parse_json_object(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
@@ -941,15 +1008,18 @@ class AdaptiveResponsePolicy(ManagedAgent):
         state = case_profile.get("psychologicalState", {}) if isinstance(case_profile, dict) else {}
         openness = clamp_float(state.get("clientOpenness", 0), 0, 10)
         context_model = case_profile.get("socialWorkContextModel", {}) if isinstance(case_profile, dict) else {}
+        progression = progression_snapshot(case_profile, student_analysis, session_continuity)
         constraints = [
             "回應必須符合服務對象自我敘事、羞恥觸發和逃避模式。",
             "不可一次過透露多個核心 hidden facts。",
+            "除非本輪出現嘲笑、評判或未修復的關係破裂，否則不要把服務對象寫成完全拒訪或永遠沉默。",
+            "每輪至少留下一個自然可追問點：情緒反應、低深度事實、或可觀察線索。",
         ]
         affect_hints: list[str] = []
         avatar_hints: list[str] = []
         target_resistance = "moderate" if openness < 4 else "mild"
         delta_range = [-0.1, 0.25]
-        allowed_depth = 1 if openness < 3 else 2
+        allowed_depth = max(1 if openness < 3 else 2, int(progression["maxDisclosureStep"]))
 
         recent_ruptures = session_continuity.get("ruptureEvents", [])[-2:]
         unresolved_rupture = bool(recent_ruptures) and not session_continuity.get("repairAttempts")
@@ -962,18 +1032,18 @@ class AdaptiveResponsePolicy(ManagedAgent):
             constraints.extend(["短答或質問式回應。", "不得透露新背景，只呈現被冒犯和關閉溝通。"])
         elif student_analysis.get("apologyRepair"):
             target_resistance = "moderate" if recent_ruptures or openness < 5 else "mild"
-            delta_range = [0.0, 0.25 if recent_ruptures or unresolved_rupture else 0.45]
+            delta_range = [0.0, 0.3 if recent_ruptures or unresolved_rupture else 0.5]
             allowed_depth = 1 if openness < 5 else 2
             affect_hints = ["defensive", "withdrawn"]
             avatar_hints = ["avoid_eye_contact"]
-            constraints.extend(["道歉只能小幅修復信任。", "如果前面被嘲笑或評判，不可即時完全合作。"])
+            constraints.extend(["道歉只能小幅修復信任。", "如果前面被嘲笑或評判，不可即時完全合作。", "但要允許對話重新開始，可提供一個低深度線索。"])
         elif student_analysis.get("minimalBackchannel"):
             target_resistance = "moderate" if openness < 5 else "mild"
-            delta_range = [-0.25, 0.05]
+            delta_range = [-0.1, 0.1]
             allowed_depth = 1
             affect_hints = ["defensive", "withdrawn"]
             avatar_hints = ["avoid_eye_contact"]
-            constraints.extend(["學生只作低投入回應時，不要重複上一句。", "呈現不確定、被敷衍感或更保留的反應。"])
+            constraints.extend(["學生只作低投入回應時，不要重複上一句。", "呈現不確定或更保留的反應，但仍要給一個低深度可追問線索。"])
         elif student_analysis.get("judgmentalOrDirective") or student_analysis.get("prematureAdvice"):
             target_resistance = "high" if openness < 5 else "moderate"
             delta_range = [-0.7, -0.2]
@@ -991,14 +1061,14 @@ class AdaptiveResponsePolicy(ManagedAgent):
         elif student_analysis.get("reflectiveListening"):
             target_resistance = "mild" if openness >= 3 else "moderate"
             delta_range = [0.15, 0.6]
-            allowed_depth = 2 if openness < 5 else 3
+            allowed_depth = max(2 if openness < 5 else 3, int(progression["maxDisclosureStep"]))
             affect_hints = ["reflective", "withdrawn"]
             avatar_hints = ["slow_nod", "avoid_eye_contact"]
             constraints.extend(["可稍微加長回答，但仍按透露規則逐步講。", "優先回應感受而非完整交代背景。"])
         elif student_analysis.get("openQuestion"):
             target_resistance = "moderate" if openness < 4 else "mild"
             delta_range = [0.05, 0.45]
-            allowed_depth = 1 if openness < 4 else 2
+            allowed_depth = max(1 if openness < 4 else 2, int(progression["maxDisclosureStep"]))
             affect_hints = ["withdrawn", "defensive", "anxious"]
             avatar_hints = ["avoid_eye_contact"]
             constraints.extend(["只小幅增加開放程度。", "可以透露一個低至中敏感線索。"])
@@ -1010,6 +1080,8 @@ class AdaptiveResponsePolicy(ManagedAgent):
             affect_hints = unique_strings([*affect_hints, "defensive", "irritated"])
             avatar_hints = unique_strings([*avatar_hints, "lean_back"])
             constraints.append("延續上一輪關係破裂，除非學生明確修復，否則不要恢復合作。")
+        elif not progression["progressionPaused"]:
+            allowed_depth = max(allowed_depth, int(progression["maxDisclosureStep"]))
 
         if context_model.get("avoidancePatterns"):
             constraints.append("自然使用個案逃避模式：" + "、".join(context_model["avoidancePatterns"][:3]))
@@ -1023,6 +1095,7 @@ class AdaptiveResponsePolicy(ManagedAgent):
             "responseStyleConstraints": unique_strings(constraints)[:8],
             "requiredAffectHints": unique_strings(affect_hints)[:4],
             "avatarBehaviorHints": unique_strings(avatar_hints)[:4],
+            **progression,
         }
 
 
@@ -1831,7 +1904,10 @@ class ClientRealismScoringAgent(ManagedAgent):
             or assessment.get("underReactionRisk")
             or assessment.get("languageNaturalnessScore", 10) < 6.5
             or assessment.get("consistencyScore", 10) < 5.5
+            or assessment.get("progressionFitScore", 10) < 5.5
+            or assessment.get("followUpAffordanceScore", 10) < 4.5
             or assessment.get("realismScore", 10) < 5.5
+            or assessment.get("avoidanceOveruseRisk")
         )
 
     def _repair_reason(self, assessment: dict[str, Any]) -> str:
@@ -1846,6 +1922,12 @@ class ClientRealismScoringAgent(ManagedAgent):
             reasons.append("個案連續性不足")
         if assessment.get("repeatedResponseRisk"):
             reasons.append("重複近期回應")
+        if assessment.get("avoidanceOveruseRisk"):
+            reasons.append("過度迴避導致訪談停滯")
+        if assessment.get("followUpAffordanceScore", 10) < 4.5:
+            reasons.append("缺少自然可追問線索")
+        if assessment.get("progressionFitScore", 10) < 5.5:
+            reasons.append("推進階段不匹配")
         return "、".join(reasons) or "回應真實度不足"
 
     async def _repair_once(
@@ -2876,7 +2958,13 @@ Recent interview:
 
 Student social worker just said:
 {payload.get("studentText")}
-"""
+
+Progression and avoidance guardrails:
+- The service user may stay guarded, but should not repeatedly shut down with only "冇咩/唔知/唔想講" style replies.
+- Unless the adaptivePolicy says progressionPaused=true, include one natural follow-up affordance: an emotion, a low-depth concrete cue, or an observable situation the trainee can ask about next.
+- Do not jump to deep disclosure. Match progressionStage and allowedDisclosureDepth.
+- After apologyRepair, trust repairs only slightly, but conversation can restart with a guarded low-depth cue.
+	"""
 
 
 REALISM_ANCHORS: dict[str, list[dict[str, Any]]] = {
@@ -2927,6 +3015,9 @@ def score_client_realism(payload: dict[str, Any], response: dict[str, Any]) -> d
         if turn.get("speaker") in {"client", "服務對象"} and str(turn.get("text", "")).strip()
     ]
     repeated_response = any(is_repeated_client_text(text, previous) for previous in recent_client_texts)
+    recent_avoidance_count = sum(1 for previous in recent_client_texts[-3:] if is_empty_avoidance_response(previous))
+    current_empty_avoidance = is_empty_avoidance_response(text)
+    progression_metrics = assess_progression_fit(payload, response, current_empty_avoidance, recent_avoidance_count)
 
     matched = matched_realism_anchors(case_type, text)
     context_consistency = assess_context_consistency(payload, response)
@@ -2972,19 +3063,28 @@ def score_client_realism(payload: dict[str, Any], response: dict[str, Any]) -> d
         realism -= 0.7
     if repeated_response:
         realism -= 0.9
+    if progression_metrics["avoidanceOveruseRisk"]:
+        realism -= 1.0
+    if progression_metrics["followUpAffordanceScore"] < 5:
+        realism -= 0.7
 
     return {
         "realismScore": round_score(realism),
         "consistencyScore": round_score(consistency_score),
         "disclosureFitScore": round_score(disclosure_fit),
         "languageNaturalnessScore": round_score(language_score),
+        "progressionFitScore": progression_metrics["progressionFitScore"],
+        "followUpAffordanceScore": progression_metrics["followUpAffordanceScore"],
         "riskSignalStrength": risk_signal_strength(risk_signals, text),
         "overDisclosureRisk": over_disclosure,
         "underReactionRisk": under_reaction,
+        "avoidanceOveruseRisk": progression_metrics["avoidanceOveruseRisk"],
         "matchedRealismAnchors": [item["id"] for item in matched[:5]],
         "anchorRationales": [item["rationale"] for item in matched[:3]],
         "contextConsistencyScore": context_consistency.get("score", 0),
         "repeatedResponseRisk": repeated_response,
+        "progressionStage": progression_metrics["progressionStage"],
+        "progressionSignals": progression_metrics["progressionSignals"],
     }
 
 
@@ -3010,6 +3110,11 @@ def apply_realism_calibration(payload: dict[str, Any], response: dict[str, Any],
         response["revealedFacts"] = (response.get("revealedFacts") or [])[:1] if risk_asked and openness >= 4 else []
         state_delta["clientOpenness"] = min(state_delta.get("clientOpenness", 0), 0.2)
         response["changeTalk"] = (response.get("changeTalk") or [])[:1] if openness >= 4 else []
+
+    if assessment.get("avoidanceOveruseRisk") or assessment.get("followUpAffordanceScore", 10) < 4.5:
+        response["resistanceLevel"] = "moderate" if not student_analysis.get("mockingOrDismissive") else "high"
+        response["affect"] = response.get("affect") if response.get("affect") in {"defensive", "withdrawn", "irritated", "ashamed", "anxious"} else "withdrawn"
+        state_delta["clientOpenness"] = min(max(state_delta.get("clientOpenness", 0), -0.1), 0.2)
 
     if student_analysis.get("mockingOrDismissive"):
         response["resistanceLevel"] = "high"
@@ -3150,6 +3255,78 @@ def response_too_complete(text: str, openness: float) -> bool:
     return sentence_count >= 4 or explanatory_markers >= 3
 
 
+def is_empty_avoidance_response(text: str) -> bool:
+    cleaned = normalize_for_repeat_check(text)
+    if not cleaned:
+        return True
+    if len(cleaned) > 34:
+        return False
+    return bool(
+        re.search(
+            r"(冇咩|冇嘢|冇野|唔知|唔想講|算啦|是但|沒什麼|没有什么|不知道|不想说|nothing|don'tknow|dontknow|rathernot)",
+            cleaned,
+            re.I,
+        )
+    )
+
+
+def follow_up_affordance_score(payload: dict[str, Any], response: dict[str, Any], current_empty_avoidance: bool) -> float:
+    text = str(response.get("clientText", "")).strip()
+    score = 7.0
+    if response.get("revealedFacts"):
+        score += 1.2
+    if response.get("changeTalk"):
+        score += 0.8
+    if response.get("riskSignals"):
+        score += 0.8
+    if matched_realism_anchors(payload.get("caseProfile", {}).get("caseType"), text):
+        score += 0.8
+    if re.search(
+        r"(老師|同學|屋企|家人|媽媽|爸爸|家姐|朋友|工作|醫生|睡|瞓|心口|戒斷|復發|飲|酒|群組|走廊|午飯|支援|轉介|安全|羞恥|羞家|被看低|睇低|冇用|廢|school|family|friend|work|sleep|withdrawal|drink|shame)",
+        text,
+        re.I,
+    ):
+        score += 1.0
+    if current_empty_avoidance:
+        score -= 3.2
+    if len(text) < 10:
+        score -= 1.5
+    return round_score(score)
+
+
+def assess_progression_fit(
+    payload: dict[str, Any],
+    response: dict[str, Any],
+    current_empty_avoidance: bool,
+    recent_avoidance_count: int,
+) -> dict[str, Any]:
+    policy = payload.get("adaptivePolicy", {}) if isinstance(payload.get("adaptivePolicy"), dict) else {}
+    student_analysis = payload.get("studentAnalysis", {}) if isinstance(payload.get("studentAnalysis"), dict) else {}
+    progression_paused = bool(policy.get("progressionPaused"))
+    stage = str(policy.get("progressionStage") or "initial_contact")
+    follow_up_score = follow_up_affordance_score(payload, response, current_empty_avoidance)
+    rupture = bool(student_analysis.get("mockingOrDismissive") or student_analysis.get("judgmentalOrDirective") or student_analysis.get("prematureAdvice"))
+    avoidance_overuse = bool(current_empty_avoidance and recent_avoidance_count >= 2 and not rupture)
+    progression_fit = 8.0
+    if not progression_paused and follow_up_score < 5:
+        progression_fit -= 2.5
+    if avoidance_overuse:
+        progression_fit -= 2.4
+    if stage in {"context_disclosure", "risk_or_need_exploration", "next_step_readiness"} and not (
+        response.get("revealedFacts") or response.get("changeTalk") or response.get("riskSignals") or follow_up_score >= 7
+    ):
+        progression_fit -= 1.4
+    if rupture and response.get("resistanceLevel") == "high":
+        progression_fit += 0.5
+    return {
+        "progressionFitScore": round_score(progression_fit),
+        "followUpAffordanceScore": follow_up_score,
+        "avoidanceOveruseRisk": avoidance_overuse,
+        "progressionStage": stage,
+        "progressionSignals": unique_strings([str(item) for item in policy.get("progressionSignals", [])])[:5],
+    }
+
+
 def risk_signal_strength(risk_signals: list[str], text: str) -> float:
     if not risk_signals:
         return 0.0
@@ -3190,6 +3367,10 @@ Return only valid JSON in the same ClientResponse shape. Do not add realismAsses
 
 Repair goals:
 {repair_goals_text}
+- If avoidanceOveruseRisk or low FollowUpAffordanceScore is present, do not make the client suddenly cooperative.
+- Instead, keep the same guarded affect and add exactly one low-depth follow-up cue, such as a feeling, observable situation, or small concrete context.
+- If progressionPaused is true because of rupture, the cue may be an emotional reaction rather than a new fact.
+- Do not repeat the previous avoidance wording.
 
 Current case:
 {json.dumps({
@@ -4327,6 +4508,7 @@ def avatar_behavior_policy(
     adaptive_policy = response.get("adaptivePolicySnapshot") or {}
     session_continuity = response.get("sessionContinuitySnapshot") or {}
     basis: list[dict[str, Any]] = []
+    progression_paused = bool(adaptive_policy.get("progressionPaused")) if isinstance(adaptive_policy, dict) else False
 
     affect = model_affect
     motion = model_motion
@@ -4380,14 +4562,24 @@ def avatar_behavior_policy(
         )
     elif resistance == "high" or affect == "irritated":
         affect = "defensive" if affect != "irritated" else "irritated"
-        motion = "lean_back"
-        intensity = 0.78
-        add_basis(
-            "defensive_resistance_high",
-            "高阻抗／防衛姿態",
-            [f"resistance:{resistance}", f"affect:{model_affect}", f"model_motion:{model_motion}"],
-            "高阻抗或防衛語氣時使用後靠和較繃緊表情，避免誤呈現為合作或放鬆。",
-        )
+        if progression_paused:
+            motion = "lean_back"
+            intensity = 0.78
+            add_basis(
+                "defensive_resistance_high",
+                "高阻抗／防衛姿態",
+                [f"resistance:{resistance}", f"affect:{model_affect}", f"model_motion:{model_motion}", "progression:paused"],
+                "高阻抗且訪談推進暫停時使用後靠和較繃緊表情，避免誤呈現為合作或放鬆。",
+            )
+        else:
+            motion = "avoid_eye_contact"
+            intensity = 0.6
+            add_basis(
+                "defensive_progression_guarded",
+                "防衛但仍可推進",
+                [f"resistance:{resistance}", f"affect:{model_affect}", "progression:not_paused"],
+                "服務對象仍有戒備，但本輪未出現明確關係破裂，因此用低幅避眼和 idle accent，而不是每次強烈後仰。",
+            )
     elif affect == "defensive":
         motion = "avoid_eye_contact"
         intensity = 0.64

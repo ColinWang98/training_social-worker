@@ -145,6 +145,11 @@ async def run_case(coordinator, case_type: str, simulation_method: str | None = 
                 "riskSignals": response.get("riskSignals", []),
                 "revealedFacts": response.get("revealedFacts", []),
                 "realismScore": (response.get("realismAssessment") or {}).get("realismScore"),
+                "progressionStage": (response.get("adaptivePolicySnapshot") or {}).get("progressionStage"),
+                "progressionFitScore": (response.get("realismAssessment") or {}).get("progressionFitScore"),
+                "followUpAffordanceScore": (response.get("realismAssessment") or {}).get("followUpAffordanceScore"),
+                "avoidanceOveruseRisk": bool((response.get("realismAssessment") or {}).get("avoidanceOveruseRisk")),
+                "progressionPaused": bool((response.get("adaptivePolicySnapshot") or {}).get("progressionPaused")),
                 "repairApplied": bool((response.get("realismAssessment") or {}).get("repairApplied")),
                 "motionCue": (response.get("avatarDirective") or {}).get("motionCue"),
                 "clipId": ((response.get("avatarDirective") or {}).get("performancePlan") or {}).get("reactionClipId")
@@ -205,6 +210,23 @@ def validate_turn(case_type: str, index: int, student_text: str, response: dict)
         raise RuntimeError(f"{case_type} round {index}: simulationMethod is required")
     if response.get("simulationStrategySnapshot") is None:
         raise RuntimeError(f"{case_type} round {index}: simulationStrategySnapshot is required")
+    adaptive_policy = response.get("adaptivePolicySnapshot") or {}
+    if adaptive_policy.get("progressionStage") not in {
+        "initial_contact",
+        "presenting_issue",
+        "context_disclosure",
+        "risk_or_need_exploration",
+        "next_step_readiness",
+    }:
+        raise RuntimeError(f"{case_type} round {index}: adaptivePolicySnapshot.progressionStage is required")
+    realism = response.get("realismAssessment") or {}
+    for key in ["progressionFitScore", "followUpAffordanceScore"]:
+        if not isinstance(realism.get(key), (int, float)):
+            raise RuntimeError(f"{case_type} round {index}: realismAssessment.{key} must be numeric")
+    if index >= 3 and realism.get("avoidanceOveruseRisk"):
+        raise RuntimeError(f"{case_type} round {index}: client response is overusing empty avoidance")
+    if not adaptive_policy.get("progressionPaused") and realism.get("followUpAffordanceScore", 10) < 3.5:
+        raise RuntimeError(f"{case_type} round {index}: response lacks a follow-up affordance")
     performance_plan = directive.get("performancePlan") or {}
     if performance_plan.get("playbackMask") != "upper_body":
         raise RuntimeError(f"{case_type} round {index}: performancePlan.playbackMask must be upper_body")

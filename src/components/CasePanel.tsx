@@ -420,8 +420,12 @@ export function CasePanel({
                     value={`${adaptivePolicySnapshot.targetOpennessDeltaRange[0]} 至 ${adaptivePolicySnapshot.targetOpennessDeltaRange[1]}`}
                   />
                   <DirectiveItem label="透露深度" value={`${adaptivePolicySnapshot.allowedDisclosureDepth}`} />
+                  <DirectiveItem label="推進階段" value={adaptivePolicySnapshot.progressionStage ?? 'n/a'} />
+                  <DirectiveItem label="推進暫停" value={adaptivePolicySnapshot.progressionPaused ? 'yes' : 'no'} />
+                  <DirectiveItem label="可追問要求" value={adaptivePolicySnapshot.minFollowUpAffordance ?? 'n/a'} />
                 </div>
                 <TagRow label="回應約束" values={adaptivePolicySnapshot.responseStyleConstraints} />
+                <TagRow label="推進訊號" values={adaptivePolicySnapshot.progressionSignals ?? []} />
                 <TagRow label="情緒提示" values={adaptivePolicySnapshot.requiredAffectHints} />
                 <TagRow label="動作提示" values={adaptivePolicySnapshot.avatarBehaviorHints} />
               </>
@@ -539,6 +543,9 @@ export function CasePanel({
                   <DirectiveItem label="連續性" value={`${realismAssessment.consistencyScore.toFixed(1)}/10`} />
                   <DirectiveItem label="透露適配" value={`${realismAssessment.disclosureFitScore.toFixed(1)}/10`} />
                   <DirectiveItem label={uiLanguage === 'english' ? 'Language naturalness' : '語言自然度'} value={`${realismAssessment.languageNaturalnessScore.toFixed(1)}/10`} />
+                  <DirectiveItem label="推進適配" value={typeof realismAssessment.progressionFitScore === 'number' ? `${realismAssessment.progressionFitScore.toFixed(1)}/10` : 'n/a'} />
+                  <DirectiveItem label="可追問性" value={typeof realismAssessment.followUpAffordanceScore === 'number' ? `${realismAssessment.followUpAffordanceScore.toFixed(1)}/10` : 'n/a'} />
+                  <DirectiveItem label="過度迴避" value={realismAssessment.avoidanceOveruseRisk ? 'yes' : 'no'} />
                 </div>
                 {realismAssessment.repairApplied && (
                   <p className="overrideNote">已校準：{realismAssessment.repairReason ?? '回應真實度不足'}</p>

@@ -182,10 +182,15 @@ export type ClientRealismAssessment = {
   consistencyScore: number;
   disclosureFitScore: number;
   languageNaturalnessScore: number;
+  progressionFitScore?: number;
+  followUpAffordanceScore?: number;
   riskSignalStrength?: number;
   overDisclosureRisk: boolean;
   underReactionRisk: boolean;
+  avoidanceOveruseRisk?: boolean;
   repeatedResponseRisk?: boolean;
+  progressionStage?: 'initial_contact' | 'presenting_issue' | 'context_disclosure' | 'risk_or_need_exploration' | 'next_step_readiness';
+  progressionSignals?: string[];
   matchedRealismAnchors: string[];
   repairApplied?: boolean;
   repairReason?: string;
@@ -406,6 +411,11 @@ export type ClientResponse = {
     responseStyleConstraints: string[];
     requiredAffectHints: AffectLabel[];
     avatarBehaviorHints: MotionCue[];
+    progressionStage?: 'initial_contact' | 'presenting_issue' | 'context_disclosure' | 'risk_or_need_exploration' | 'next_step_readiness';
+    progressionPaused?: boolean;
+    progressionSignals?: string[];
+    minFollowUpAffordance?: string;
+    maxDisclosureStep?: 1 | 2 | 3 | 4;
   };
   simulationStrategySnapshot?: SimulationStrategySnapshot;
   sessionContinuitySnapshot?: {

@@ -27,6 +27,8 @@ def load_session_smoke_module():
 def score_rows(case_summary: dict[str, Any]) -> dict[str, Any]:
     rows = case_summary.get("rows", [])
     realism_values = [row.get("realismScore") for row in rows if isinstance(row.get("realismScore"), (int, float))]
+    progression_values = [row.get("progressionFitScore") for row in rows if isinstance(row.get("progressionFitScore"), (int, float))]
+    affordance_values = [row.get("followUpAffordanceScore") for row in rows if isinstance(row.get("followUpAffordanceScore"), (int, float))]
     reaction_ids = [row.get("reactionInstanceId") for row in rows if row.get("reactionInstanceId")]
     disclosed = case_summary.get("disclosedFacts", [])
     start_openness = case_summary.get("startOpenness", 0)
@@ -46,6 +48,12 @@ def score_rows(case_summary: dict[str, Any]) -> dict[str, Any]:
         disclosure -= 2.0
     if len(disclosed) > max(1, len(rows) // 2 + 1):
         disclosure -= 1.0
+    progression = statistics.mean(progression_values) if progression_values else 7.0
+    affordance = statistics.mean(affordance_values) if affordance_values else 7.0
+    if any(row.get("avoidanceOveruseRisk") for row in rows):
+        progression -= 1.5
+    if rows and not any(row.get("progressionStage") in {"presenting_issue", "context_disclosure", "risk_or_need_exploration", "next_step_readiness"} for row in rows[1:]):
+        progression -= 1.0
     risk = 8.5
     for row in risk_rows:
         if "safety_review_repaired" in row.get("riskSignals", []):
@@ -56,7 +64,7 @@ def score_rows(case_summary: dict[str, Any]) -> dict[str, Any]:
     if any(row.get("resistance") == "high" for row in rows) and final_openness > start_openness:
         interview_quality += 0.5
     context = min(10.0, realism + 0.4)
-    overall = statistics.mean([schema, realism, continuity, disclosure, risk, avatar, corpus, interview_quality, context])
+    overall = statistics.mean([schema, realism, continuity, disclosure, progression, affordance, risk, avatar, corpus, interview_quality, context])
 
     return {
         "caseType": case_summary.get("caseType"),
@@ -64,6 +72,8 @@ def score_rows(case_summary: dict[str, Any]) -> dict[str, Any]:
         "clientRealism": round(realism, 1),
         "contextConsistency": round(context, 1),
         "disclosurePacing": round(disclosure, 1),
+        "engagementProgression": round(max(0, progression), 1),
+        "followUpAffordance": round(max(0, affordance), 1),
         "sessionContinuity": round(max(0, continuity), 1),
         "riskGating": round(max(0, risk), 1),
         "socialWorkInterviewQuality": round(min(10, interview_quality), 1),
@@ -75,6 +85,8 @@ def score_rows(case_summary: dict[str, Any]) -> dict[str, Any]:
             f"openness={start_openness}->{final_openness}",
             f"disclosedFacts={len(disclosed)}",
             f"riskRows={len(risk_rows)}",
+            f"progression={round(max(0, progression), 1)}",
+            f"affordance={round(max(0, affordance), 1)}",
         ],
     }
 
@@ -99,13 +111,14 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"Simulation method: {report.get('simulationMethod', 'mixed')}",
         "",
-        "| Case | Overall | Realism | Continuity | Disclosure | Risk | Avatar |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Case | Overall | Realism | Progression | Affordance | Continuity | Disclosure | Risk | Avatar |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         lines.append(
             f"| {row['caseType']} | {row['overallReadiness']} | {row['clientRealism']} | "
-            f"{row['sessionContinuity']} | {row['disclosurePacing']} | {row['riskGating']} | {row['avatarAlignment']} |"
+            f"{row['engagementProgression']} | {row['followUpAffordance']} | {row['sessionContinuity']} | "
+            f"{row['disclosurePacing']} | {row['riskGating']} | {row['avatarAlignment']} |"
         )
     lines.extend(["", "## Notes"])
     for row in rows:
