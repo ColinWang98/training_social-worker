@@ -12,7 +12,7 @@ This project is a teaching and research prototype. It is not a diagnostic tool, 
 
 - 模拟学生社工与服务对象的多轮访谈。
 - 使用 DeepSeek 生成服务对象回应，由本地 Python ADK sidecar 统一管理个案状态、检索、安全校准、avatar 指令和访谈后督导。
-- 前端使用 React、Three.js、`@pixiv/three-vrm`，支持 John Do ARKit VRM、Streamoji GLB 等 avatar。
+- 前端使用 React、Three.js、`@pixiv/three-vrm`，默认使用 Streamoji ARKit GLB；John Do ARKit VRM 保留为稳定 fallback/对照 avatar。
 - 支持香港口语粤语服务对象回应、香港繁中 UI，也支持英文 UI/回应切换。
 - 使用本地 SQLite evidence cards / corpus retrieval， 可选本地 embedding rerank。
 - 训练视图默认防剧透，只显示转介摘要和已自然透露的信息；完整个案状态、证据来源、avatar debug 和规则依据只在督导/研究者视图显示。
@@ -377,7 +377,7 @@ student text
   -> session trace persistence
 ```
 
-The avatar is driven by semantic directives, not raw LLM bone control. The frontend maps affect, motion cue, case baseline, and performance plan into seated upper-body VRM motion.
+The avatar is driven by semantic directives, not raw LLM bone control. Streamoji GLB is the default avatar and uses a generic humanoid seated adapter plus ARKit expression control; John Do ARKit VRM remains the stable VRM fallback. The frontend maps affect, motion cue, case baseline, and performance plan into seated upper-body motion with idle-first micro movement and stronger reactions only for rupture/risk/emotion-shift moments.
 
 ### Mixamo motion candidates
 

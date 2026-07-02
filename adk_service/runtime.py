@@ -4799,13 +4799,6 @@ def avatar_performance_plan(
         "judgmental_directive_guard",
         "defensive_resistance_high",
     }
-    clear_reaction_rule_ids = {
-        "defensive_guarded_avoidance",
-        "apology_repair_guarded",
-        "shame_low_self_worth",
-        "reflective_change_talk",
-    }
-
     if high_risk or "safety_low_intensity" in rule_ids:
         reaction_family = "risk"
         reaction_clip = "reaction_risk_low_intensity_downward"
@@ -4924,12 +4917,8 @@ def avatar_performance_plan(
         release_ms = 700
         return_bridge_ms = 700
         release_curve = "soft"
-    strong_reaction = bool(
-        high_risk
-        or rule_ids & strong_rule_ids
-        or (rule_ids & clear_reaction_rule_ids and affect in {"ashamed", "irritated", "defensive"})
-    )
-    if not strong_reaction and reaction_reason in {"emotion_shift", "engagement"}:
+    strong_reaction = bool(high_risk or rule_ids & strong_rule_ids)
+    if not strong_reaction and reaction_reason in {"emotion_shift", "engagement", "repair"}:
         reaction_clip = None
         motion_energy = "low"
     elif reaction_clip and motion_energy == "low":
@@ -4956,7 +4945,7 @@ def avatar_performance_plan(
         "crossfadeMs": max(250, min(transition_ms, 1000)),
         "reactionDurationMs": reaction_duration_ms,
         "releaseMs": release_ms,
-        "motionScale": round(min(0.55 if high_risk else 0.88, max(0.25, intensity)), 2),
+        "motionScale": round(min(0.55 if high_risk else 0.82 if strong_reaction else 0.46, max(0.2, intensity)), 2),
         "fallbackUsed": fallback_used,
         "motionLanguage": "seated-v1",
         "motionScriptId": f"sml_{reaction_family}_{'low' if high_risk else 'standard'}",

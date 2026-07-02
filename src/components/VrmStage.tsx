@@ -378,7 +378,7 @@ export function VrmStage({
             currentExpressionRef.current = {};
             currentMouthRef.current = 0;
 
-            const postLoadWarnings: string[] = ['non-VRM GLB: using upper-body seated visual adapter; lower-body VRM seating disabled'];
+            const postLoadWarnings: string[] = ['non-VRM GLB: using seated humanoid adapter with ARKit expression layer'];
             if (!frameAvatarUpperBody(camera, controls, gazeTarget, gltfScene)) {
               postLoadWarnings.push('camera auto-frame skipped: invalid model bounds');
             }
@@ -396,8 +396,8 @@ export function VrmStage({
               avatarLoaded: true,
               vrmaLoaded: false,
               message: arkitAvailable
-                ? `Loaded ${avatarLabel ?? modelPath} as GLB with ARKit 52 blendshape targets.${warningSuffix}`
-                : `Loaded ${avatarLabel ?? modelPath} as GLB; ARKit blendshapes unavailable.${warningSuffix}`,
+                ? `Loaded ${avatarLabel ?? modelPath} as GLB with seated motion adapter and ARKit 52 blendshape targets.${warningSuffix}`
+                : `Loaded ${avatarLabel ?? modelPath} as GLB with seated motion adapter; ARKit blendshapes unavailable.${warningSuffix}`,
               blendshapeDebug: arkitControllerRef.current
                 ? arkitDebugSnapshot(
                   modelPath,
@@ -1264,7 +1264,7 @@ function createAvatarPerformanceController() {
         releaseDuration = Math.max(0.2, (plan?.releaseMs ?? 700) / 1000);
         returnBridgeDuration = Math.max(0.25, (plan?.returnBridgeMs ?? 700) / 1000);
         attackDuration = Math.max(0.12, (plan?.attackMs ?? 280) / 1000);
-        selected = plan?.idleMixOnly ? null : selectProceduralReactionClip(plan, recentClipIds);
+        selected = !plan || plan.idleMixOnly ? null : selectProceduralReactionClip(plan, recentClipIds);
         if (selected) {
           recentClipIds.unshift(selected.clip.id);
           recentClipIds.splice(5);
@@ -1524,7 +1524,13 @@ type IdlePhraseId =
   | 'listening_stillness'
   | 'soft_gaze_shift'
   | 'small_inhale_exhale'
+  | 'breath_pause'
+  | 'micro_head_tilt'
+  | 'soft_eye_avert'
+  | 'listening_forward'
   | 'lap_hand_settle'
+  | 'wrist_settle'
+  | 'contained_hand_shift'
   | 'finger_micro_fidget'
   | 'shoulder_settle'
   | 'downward_glance'
@@ -1550,7 +1556,13 @@ const IDLE_PHRASES: IdlePhrase[] = [
   { id: 'listening_stillness', families: ['neutral', 'soft_engagement', 'reflective'], minGap: 4.2, duration: 2.8, energy: 'low' },
   { id: 'soft_gaze_shift', families: ['neutral', 'soft_engagement', 'reflective'], minGap: 3.4, duration: 2.2, energy: 'low' },
   { id: 'small_inhale_exhale', families: ['neutral', 'withdrawn', 'ashamed', 'risk'], minGap: 3.8, duration: 2.6, energy: 'low' },
+  { id: 'breath_pause', families: ['neutral', 'withdrawn', 'ashamed', 'risk', 'defensive'], minGap: 4.0, duration: 2.9, energy: 'low' },
+  { id: 'micro_head_tilt', families: ['neutral', 'soft_engagement', 'reflective', 'anxious'], minGap: 4.4, duration: 2.3, energy: 'low' },
+  { id: 'soft_eye_avert', families: ['neutral', 'withdrawn', 'ashamed', 'defensive'], minGap: 3.8, duration: 2.2, energy: 'low' },
+  { id: 'listening_forward', families: ['neutral', 'soft_engagement', 'reflective'], minGap: 4.7, duration: 2.5, energy: 'low' },
   { id: 'lap_hand_settle', families: ['neutral', 'defensive', 'withdrawn', 'ashamed'], minGap: 4.6, duration: 2.4, energy: 'low' },
+  { id: 'wrist_settle', families: ['neutral', 'defensive', 'withdrawn', 'ashamed'], minGap: 5.2, duration: 2.2, energy: 'low' },
+  { id: 'contained_hand_shift', families: ['neutral', 'defensive', 'anxious', 'withdrawn'], minGap: 4.4, duration: 2.5, energy: 'low' },
   { id: 'finger_micro_fidget', families: ['anxious', 'defensive'], minGap: 3.2, duration: 2.2, energy: 'low' },
   { id: 'shoulder_settle', families: ['defensive', 'anxious', 'soft_engagement'], minGap: 5.2, duration: 2.6, energy: 'low' },
   { id: 'downward_glance', families: ['withdrawn', 'ashamed', 'risk'], minGap: 3.4, duration: 2.4, energy: 'low' },
@@ -1643,11 +1655,41 @@ function idlePhrasePose(id: IdlePhraseId, local: number, envelope: number, energ
     pose.spineX += 0.014 * w;
     pose.chestX += 0.024 * w;
     pose.headX += 0.008 * w;
+  } else if (id === 'breath_pause') {
+    pose.spineX += 0.01 * w;
+    pose.chestX += 0.018 * w;
+    pose.neckX -= 0.01 * w;
+    armPose.leftLowerArmX += 0.012 * w;
+    armPose.rightLowerArmX += 0.012 * w;
+  } else if (id === 'micro_head_tilt') {
+    pose.headZ += 0.036 * soft;
+    pose.chestZ += 0.01 * soft;
+    pose.headY += 0.012 * soft;
+  } else if (id === 'soft_eye_avert') {
+    pose.neckY += 0.028 * soft;
+    pose.headY += 0.052 * soft;
+    pose.headX -= 0.012 * w;
+  } else if (id === 'listening_forward') {
+    pose.spineX += 0.012 * w;
+    pose.chestX += 0.026 * w;
+    pose.headX += 0.012 * w;
+    armPose.leftLowerArmX += 0.014 * w;
+    armPose.rightLowerArmX += 0.014 * w;
   } else if (id === 'lap_hand_settle') {
     armPose.leftLowerArmX += 0.028 * w;
     armPose.rightLowerArmX += 0.028 * w;
     armPose.leftHandY -= 0.03 * w;
     armPose.rightHandY += 0.03 * w;
+  } else if (id === 'wrist_settle') {
+    armPose.leftHandY -= 0.032 * w;
+    armPose.rightHandY += 0.032 * w;
+    armPose.leftHandZ += 0.018 * soft;
+    armPose.rightHandZ -= 0.018 * soft;
+  } else if (id === 'contained_hand_shift') {
+    armPose.leftLowerArmY -= 0.022 * soft;
+    armPose.rightLowerArmY += 0.022 * soft;
+    armPose.leftHandY -= 0.024 * soft;
+    armPose.rightHandY += 0.024 * soft;
   } else if (id === 'finger_micro_fidget') {
     armPose.leftHandY += 0.018 * quick;
     armPose.rightHandY -= 0.018 * quick;
@@ -2310,9 +2352,20 @@ function expressionOverlayForPerformance(
 
 function idlePhraseExpressionWeight(idlePhraseId: string) {
   if (idlePhraseId === 'listening_stillness') return 0.04;
-  if (idlePhraseId === 'soft_gaze_shift' || idlePhraseId === 'soft_half_nod') return 0.08;
+  if (
+    idlePhraseId === 'soft_gaze_shift' ||
+    idlePhraseId === 'soft_half_nod' ||
+    idlePhraseId === 'micro_head_tilt' ||
+    idlePhraseId === 'listening_forward'
+  ) return 0.08;
+  if (idlePhraseId === 'soft_eye_avert' || idlePhraseId === 'breath_pause') return 0.1;
   if (idlePhraseId === 'downward_glance' || idlePhraseId === 'ashamed_hand_press') return 0.12;
-  if (idlePhraseId === 'finger_micro_fidget' || idlePhraseId === 'guarded_scan') return 0.1;
+  if (
+    idlePhraseId === 'finger_micro_fidget' ||
+    idlePhraseId === 'guarded_scan' ||
+    idlePhraseId === 'wrist_settle' ||
+    idlePhraseId === 'contained_hand_shift'
+  ) return 0.1;
   return 0.06;
 }
 
@@ -2355,9 +2408,16 @@ function motionExpressionWeights(
     base.eyeLookDownLeft = Math.max(base.eyeLookDownLeft ?? 0, 0.24 * w);
     base.eyeLookDownRight = Math.max(base.eyeLookDownRight ?? 0, 0.24 * w);
   }
-  if (idlePhraseId === 'guarded_scan' || idlePhraseId === 'soft_gaze_shift') {
+  if (idlePhraseId === 'guarded_scan' || idlePhraseId === 'soft_gaze_shift' || idlePhraseId === 'soft_eye_avert') {
     base.eyeSquintLeft = Math.max(base.eyeSquintLeft ?? 0, 0.08 * w);
     base.eyeSquintRight = Math.max(base.eyeSquintRight ?? 0, 0.08 * w);
+  }
+  if (idlePhraseId === 'micro_head_tilt' || idlePhraseId === 'listening_forward') {
+    base.browInnerUp = Math.max(base.browInnerUp ?? 0, 0.1 * w);
+  }
+  if (idlePhraseId === 'wrist_settle' || idlePhraseId === 'contained_hand_shift' || idlePhraseId === 'breath_pause') {
+    base.mouthPressLeft = Math.max(base.mouthPressLeft ?? 0, 0.08 * w);
+    base.mouthPressRight = Math.max(base.mouthPressRight ?? 0, 0.08 * w);
   }
   return base;
 }
@@ -2601,14 +2661,14 @@ function frameAvatarUpperBody(
     return false;
   }
 
-  const upperBodyY = box.min.y + size.y * 0.8;
-  const upperBodyHeight = Math.max(0.78, size.y * 0.5);
-  const targetY = Math.min(1.62, Math.max(1.18, box.min.y + size.y * 0.76));
+  const upperBodyY = box.min.y + size.y * 0.84;
+  const upperBodyHeight = Math.max(0.62, size.y * 0.38);
+  const targetY = Math.min(1.68, Math.max(1.22, box.min.y + size.y * 0.8));
   const verticalFov = THREE.MathUtils.degToRad(camera.fov);
   const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.55));
-  const distanceForWidth = (size.x * 0.86) / (2 * Math.tan(horizontalFov / 2));
+  const distanceForWidth = (size.x * 0.72) / (2 * Math.tan(horizontalFov / 2));
   const distanceForHeight = upperBodyHeight / (2 * Math.tan(verticalFov / 2));
-  const distance = Math.min(3.05, Math.max(1.78, distanceForWidth * 1.16, distanceForHeight * 1.04));
+  const distance = Math.min(2.72, Math.max(1.34, distanceForWidth * 1.04, distanceForHeight * 0.88));
   const targetX = Math.abs(center.x) > 0.35 ? 0 : center.x;
   const targetZ = Math.abs(center.z) > 0.35 ? 0 : center.z;
   controls.target.set(targetX, targetY, targetZ);
@@ -2740,6 +2800,14 @@ type GenericGlbBoneName =
   | 'rightFoot';
 
 type GenericGlbBoneRuntime = ReturnType<typeof createGenericGlbBoneRuntime>;
+type GenericGlbBoneMap = Partial<Record<GenericGlbBoneName, THREE.Object3D>>;
+type GenericGlbRig = {
+  root: THREE.Object3D;
+  bones: GenericGlbBoneMap;
+  rest: Map<THREE.Object3D, THREE.Quaternion>;
+  primary: boolean;
+  score: number;
+};
 
 const STREAMOJI_GLB_ARM_CALIBRATION = {
   shoulderBaseZ: 0.1,
@@ -2756,33 +2824,14 @@ const STREAMOJI_GLB_ARM_CALIBRATION = {
 };
 
 function createGenericGlbBoneRuntime(scene: THREE.Object3D) {
-  const humanoidRoot = findPrimaryHumanoidRoot(scene) ?? scene;
-  const bones: Partial<Record<GenericGlbBoneName, THREE.Object3D>> = {
-    hips: humanoidRoot,
-    spine: findDescendantBone(humanoidRoot, ['Spine']),
-    chest: findDescendantBone(humanoidRoot, ['Spine1', 'Chest']),
-    upperChest: findDescendantBone(humanoidRoot, ['Spine2', 'UpperChest']),
-    neck: findDescendantBone(humanoidRoot, ['Neck']),
-    head: findDescendantBone(humanoidRoot, ['Head']),
-    leftShoulder: findDescendantBone(humanoidRoot, ['LeftShoulder']),
-    rightShoulder: findDescendantBone(humanoidRoot, ['RightShoulder']),
-    leftUpperArm: findDescendantBone(humanoidRoot, ['LeftArm', 'LeftUpperArm']),
-    rightUpperArm: findDescendantBone(humanoidRoot, ['RightArm', 'RightUpperArm']),
-    leftLowerArm: findDescendantBone(humanoidRoot, ['LeftForeArm', 'LeftLowerArm']),
-    rightLowerArm: findDescendantBone(humanoidRoot, ['RightForeArm', 'RightLowerArm']),
-    leftHand: findDescendantBone(humanoidRoot, ['LeftHand']),
-    rightHand: findDescendantBone(humanoidRoot, ['RightHand']),
-    leftUpperLeg: findDescendantBone(humanoidRoot, ['LeftUpLeg', 'LeftUpperLeg']),
-    rightUpperLeg: findDescendantBone(humanoidRoot, ['RightUpLeg', 'RightUpperLeg']),
-    leftLowerLeg: findDescendantBone(humanoidRoot, ['LeftLeg', 'LeftLowerLeg']),
-    rightLowerLeg: findDescendantBone(humanoidRoot, ['RightLeg', 'RightLowerLeg']),
-    leftFoot: findDescendantBone(humanoidRoot, ['LeftFoot']),
-    rightFoot: findDescendantBone(humanoidRoot, ['RightFoot']),
-  };
-  const rest = new Map<THREE.Object3D, THREE.Quaternion>();
-  Object.values(bones).forEach((bone) => {
-    if (bone) rest.set(bone, bone.quaternion.clone());
-  });
+  const rootCandidates = findHumanoidRootCandidates(scene);
+  const roots = rootCandidates.length
+    ? rootCandidates
+    : [{ root: scene, score: humanoidRootScore(scene) }];
+  const rigs = roots
+    .filter((candidate, index) => index === 0 || candidate.score >= 5)
+    .slice(0, 3)
+    .map((candidate, index) => createGenericGlbRig(candidate.root, candidate.score, index === 0));
 
   return {
     apply(
@@ -2790,119 +2839,19 @@ function createGenericGlbBoneRuntime(scene: THREE.Object3D) {
       delta: number,
       options: { intensity: number; reactionWeight: number; speechLevel: number },
     ) {
-      const scale = Math.max(0.08, Math.min(0.28, options.intensity * 0.22 + options.reactionWeight * 0.04));
-      const speech = Math.max(0, Math.min(1, options.speechLevel)) * 0.014;
-      const q = (x: number, y: number, z: number) =>
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(x * scale, y * scale, z * scale, 'XYZ'));
-      const armQ = (x: number, y: number, z: number) =>
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, 'XYZ'));
-
-      applyGenericGlbBone(bones.hips, rest, armQ(-0.18, 0, 0), delta, 0.28);
-      applyGenericGlbBone(bones.leftUpperLeg, rest, armQ(-1.12, 0.08, 0.06), delta, 0.28);
-      applyGenericGlbBone(bones.rightUpperLeg, rest, armQ(-1.12, -0.08, -0.06), delta, 0.28);
-      applyGenericGlbBone(bones.leftLowerLeg, rest, armQ(1.18, 0, 0.02), delta, 0.28);
-      applyGenericGlbBone(bones.rightLowerLeg, rest, armQ(1.18, 0, -0.02), delta, 0.28);
-      applyGenericGlbBone(bones.leftFoot, rest, armQ(-0.18, 0, 0.04), delta, 0.28);
-      applyGenericGlbBone(bones.rightFoot, rest, armQ(-0.18, 0, -0.04), delta, 0.28);
-
-      applyGenericGlbBone(bones.spine, rest, q(pose.pose.spineX * 0.6, pose.pose.spineY * 0.45, 0), delta);
-      applyGenericGlbBone(bones.chest, rest, q(pose.pose.chestX * 0.6, pose.pose.chestY * 0.45, pose.pose.chestZ * 0.4), delta);
-      applyGenericGlbBone(
-        bones.upperChest,
-        rest,
-        q(pose.pose.chestX * 0.35, pose.pose.chestY * 0.28, pose.pose.chestZ * 0.25),
-        delta,
-      );
-      applyGenericGlbBone(bones.neck, rest, q(pose.pose.neckX * 0.75 + speech, pose.pose.neckY * 0.65, 0), delta);
-      applyGenericGlbBone(bones.head, rest, q(pose.pose.headX * 0.78 + speech, pose.pose.headY * 0.72, pose.pose.headZ * 0.62), delta);
-
-      const arm = STREAMOJI_GLB_ARM_CALIBRATION;
-      applyGenericGlbBone(
-        bones.leftShoulder,
-        rest,
-        armQ(0.018, 0.02, -arm.shoulderBaseZ - pose.armPose.leftUpperArmZ * arm.shoulderOverlayZ),
-        delta,
-        0.2,
-      );
-      applyGenericGlbBone(
-        bones.rightShoulder,
-        rest,
-        armQ(0.018, -0.02, arm.shoulderBaseZ - pose.armPose.rightUpperArmZ * arm.shoulderOverlayZ),
-        delta,
-        0.2,
-      );
-      applyGenericGlbBone(
-        bones.leftUpperArm,
-        rest,
-        armQ(
-          0.18 + pose.armPose.upperArmX * 0.08,
-          -0.08 + pose.armPose.leftUpperArmY * 0.055,
-          arm.upperArmForwardZ - pose.armPose.leftUpperArmZ * arm.upperArmOverlayZ,
-        ),
-        delta,
-        0.22,
-      );
-      applyGenericGlbBone(
-        bones.rightUpperArm,
-        rest,
-        armQ(
-          0.18 + pose.armPose.upperArmX * 0.08,
-          0.08 + pose.armPose.rightUpperArmY * 0.055,
-          -arm.upperArmForwardZ - pose.armPose.rightUpperArmZ * arm.upperArmOverlayZ,
-        ),
-        delta,
-        0.22,
-      );
-      applyGenericGlbBone(
-        bones.leftLowerArm,
-        rest,
-        armQ(
-          arm.lowerArmForwardX + pose.armPose.leftLowerArmX * 0.075,
-          -arm.lowerArmInwardY + pose.armPose.leftLowerArmY * 0.08,
-          -arm.lowerArmFoldZ - pose.armPose.leftLowerArmZ * arm.lowerArmOverlayZ,
-        ),
-        delta,
-        0.24,
-      );
-      applyGenericGlbBone(
-        bones.rightLowerArm,
-        rest,
-        armQ(
-          arm.lowerArmForwardX + pose.armPose.rightLowerArmX * 0.075,
-          arm.lowerArmInwardY + pose.armPose.rightLowerArmY * 0.08,
-          arm.lowerArmFoldZ - pose.armPose.rightLowerArmZ * arm.lowerArmOverlayZ,
-        ),
-        delta,
-        0.24,
-      );
-      applyGenericGlbBone(
-        bones.leftHand,
-        rest,
-        armQ(
-          arm.handPitchX + pose.armPose.handX * 0.045,
-          -arm.handInwardY + pose.armPose.leftHandY * arm.handOverlay,
-          -pose.armPose.leftHandZ * arm.handOverlay,
-        ),
-        delta,
-        0.18,
-      );
-      applyGenericGlbBone(
-        bones.rightHand,
-        rest,
-        armQ(
-          arm.handPitchX + pose.armPose.handX * 0.045,
-          arm.handInwardY + pose.armPose.rightHandY * arm.handOverlay,
-          -pose.armPose.rightHandZ * arm.handOverlay,
-        ),
-        delta,
-        0.18,
-      );
+      rigs.forEach((rig) => {
+        applyGenericGlbRig(rig, pose, delta, options);
+      });
       scene.updateMatrixWorld(true);
     },
   };
 }
 
 function findPrimaryHumanoidRoot(scene: THREE.Object3D) {
+  return findHumanoidRootCandidates(scene).find((candidate) => candidate.score >= 9)?.root;
+}
+
+function findHumanoidRootCandidates(scene: THREE.Object3D) {
   const candidates: THREE.Object3D[] = [];
   scene.traverse((object) => {
     if (object.name === 'Hips') candidates.push(object);
@@ -2912,8 +2861,8 @@ function findPrimaryHumanoidRoot(scene: THREE.Object3D) {
       root: candidate,
       score: humanoidRootScore(candidate),
     }))
-    .sort((a, b) => b.score - a.score)
-    .find((candidate) => candidate.score >= 9)?.root;
+    .filter((candidate) => candidate.score >= 3)
+    .sort((a, b) => b.score - a.score);
 }
 
 function humanoidRootScore(root: THREE.Object3D) {
@@ -2946,6 +2895,159 @@ function findDescendantBone(root: THREE.Object3D, names: string[]) {
     found = object;
   });
   return found;
+}
+
+function createGenericGlbRig(root: THREE.Object3D, score: number, primary: boolean): GenericGlbRig {
+  const bones: GenericGlbBoneMap = {
+    hips: root,
+    spine: findDescendantBone(root, ['Spine']),
+    chest: findDescendantBone(root, ['Spine1', 'Chest']),
+    upperChest: findDescendantBone(root, ['Spine2', 'UpperChest']),
+    neck: findDescendantBone(root, ['Neck']),
+    head: findDescendantBone(root, ['Head']),
+    leftShoulder: findDescendantBone(root, ['LeftShoulder']),
+    rightShoulder: findDescendantBone(root, ['RightShoulder']),
+    leftUpperArm: findDescendantBone(root, ['LeftArm', 'LeftUpperArm']),
+    rightUpperArm: findDescendantBone(root, ['RightArm', 'RightUpperArm']),
+    leftLowerArm: findDescendantBone(root, ['LeftForeArm', 'LeftLowerArm']),
+    rightLowerArm: findDescendantBone(root, ['RightForeArm', 'RightLowerArm']),
+    leftHand: findDescendantBone(root, ['LeftHand']),
+    rightHand: findDescendantBone(root, ['RightHand']),
+    leftUpperLeg: findDescendantBone(root, ['LeftUpLeg', 'LeftUpperLeg']),
+    rightUpperLeg: findDescendantBone(root, ['RightUpLeg', 'RightUpperLeg']),
+    leftLowerLeg: findDescendantBone(root, ['LeftLeg', 'LeftLowerLeg']),
+    rightLowerLeg: findDescendantBone(root, ['RightLeg', 'RightLowerLeg']),
+    leftFoot: findDescendantBone(root, ['LeftFoot']),
+    rightFoot: findDescendantBone(root, ['RightFoot']),
+  };
+  const rest = new Map<THREE.Object3D, THREE.Quaternion>();
+  Object.values(bones).forEach((bone) => {
+    if (bone) rest.set(bone, bone.quaternion.clone());
+  });
+  return { root, bones, rest, primary, score };
+}
+
+function applyGenericGlbRig(
+  rig: GenericGlbRig,
+  pose: BlendedPose,
+  delta: number,
+  options: { intensity: number; reactionWeight: number; speechLevel: number },
+) {
+  const { bones, rest } = rig;
+  const scaleLimit = rig.primary ? 0.24 : 0.18;
+  const scale = Math.max(0.06, Math.min(scaleLimit, options.intensity * 0.18 + options.reactionWeight * 0.035));
+  const speech = Math.max(0, Math.min(1, options.speechLevel)) * (rig.primary ? 0.012 : 0.016);
+  const q = (x: number, y: number, z: number) =>
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(x * scale, y * scale, z * scale, 'XYZ'));
+  const armQ = (x: number, y: number, z: number) =>
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, 'XYZ'));
+
+  if (rig.primary) {
+    applyGenericGlbBone(bones.hips, rest, armQ(-0.2, 0, 0), delta, 0.3);
+    applyGenericGlbBone(bones.leftUpperLeg, rest, armQ(-1.2, 0.1, 0.06), delta, 0.32);
+    applyGenericGlbBone(bones.rightUpperLeg, rest, armQ(-1.2, -0.1, -0.06), delta, 0.32);
+    applyGenericGlbBone(bones.leftLowerLeg, rest, armQ(1.24, 0, 0.02), delta, 0.32);
+    applyGenericGlbBone(bones.rightLowerLeg, rest, armQ(1.24, 0, -0.02), delta, 0.32);
+    applyGenericGlbBone(bones.leftFoot, rest, armQ(-0.2, 0, 0.04), delta, 0.32);
+    applyGenericGlbBone(bones.rightFoot, rest, armQ(-0.2, 0, -0.04), delta, 0.32);
+  }
+
+  applyGenericGlbBone(bones.spine, rest, q(pose.pose.spineX * 0.55, pose.pose.spineY * 0.42, 0), delta);
+  applyGenericGlbBone(bones.chest, rest, q(pose.pose.chestX * 0.55, pose.pose.chestY * 0.42, pose.pose.chestZ * 0.34), delta);
+  applyGenericGlbBone(
+    bones.upperChest,
+    rest,
+    q(pose.pose.chestX * 0.32, pose.pose.chestY * 0.24, pose.pose.chestZ * 0.2),
+    delta,
+  );
+  applyGenericGlbBone(bones.neck, rest, q(pose.pose.neckX * 0.7 + speech, pose.pose.neckY * 0.58, 0), delta);
+  applyGenericGlbBone(bones.head, rest, q(pose.pose.headX * 0.72 + speech, pose.pose.headY * 0.62, pose.pose.headZ * 0.5), delta);
+
+  const arm = STREAMOJI_GLB_ARM_CALIBRATION;
+  if (bones.leftShoulder || bones.rightShoulder || bones.leftUpperArm || bones.rightUpperArm) {
+    applyGenericGlbBone(
+      bones.leftShoulder,
+      rest,
+      armQ(0.018, 0.02, -arm.shoulderBaseZ - pose.armPose.leftUpperArmZ * arm.shoulderOverlayZ),
+      delta,
+      0.26,
+    );
+    applyGenericGlbBone(
+      bones.rightShoulder,
+      rest,
+      armQ(0.018, -0.02, arm.shoulderBaseZ - pose.armPose.rightUpperArmZ * arm.shoulderOverlayZ),
+      delta,
+      0.26,
+    );
+    applyGenericGlbBone(
+      bones.leftUpperArm,
+      rest,
+      armQ(
+        0.14 + pose.armPose.upperArmX * 0.055,
+        -0.06 + pose.armPose.leftUpperArmY * 0.04,
+        arm.upperArmForwardZ - pose.armPose.leftUpperArmZ * arm.upperArmOverlayZ,
+      ),
+      delta,
+      0.3,
+    );
+    applyGenericGlbBone(
+      bones.rightUpperArm,
+      rest,
+      armQ(
+        0.14 + pose.armPose.upperArmX * 0.055,
+        0.06 + pose.armPose.rightUpperArmY * 0.04,
+        -arm.upperArmForwardZ - pose.armPose.rightUpperArmZ * arm.upperArmOverlayZ,
+      ),
+      delta,
+      0.3,
+    );
+    applyGenericGlbBone(
+      bones.leftLowerArm,
+      rest,
+      armQ(
+        arm.lowerArmForwardX + pose.armPose.leftLowerArmX * 0.052,
+        -arm.lowerArmInwardY + pose.armPose.leftLowerArmY * 0.055,
+        -arm.lowerArmFoldZ - pose.armPose.leftLowerArmZ * arm.lowerArmOverlayZ,
+      ),
+      delta,
+      0.32,
+    );
+    applyGenericGlbBone(
+      bones.rightLowerArm,
+      rest,
+      armQ(
+        arm.lowerArmForwardX + pose.armPose.rightLowerArmX * 0.052,
+        arm.lowerArmInwardY + pose.armPose.rightLowerArmY * 0.055,
+        arm.lowerArmFoldZ - pose.armPose.rightLowerArmZ * arm.lowerArmOverlayZ,
+      ),
+      delta,
+      0.32,
+    );
+  }
+
+  const handScale = rig.primary ? 1 : 0.35;
+  applyGenericGlbBone(
+    bones.leftHand,
+    rest,
+    armQ(
+      arm.handPitchX + pose.armPose.handX * 0.03 * handScale,
+      -arm.handInwardY + pose.armPose.leftHandY * arm.handOverlay * handScale,
+      -pose.armPose.leftHandZ * arm.handOverlay * handScale,
+    ),
+    delta,
+    0.24,
+  );
+  applyGenericGlbBone(
+    bones.rightHand,
+    rest,
+    armQ(
+      arm.handPitchX + pose.armPose.handX * 0.03 * handScale,
+      arm.handInwardY + pose.armPose.rightHandY * arm.handOverlay * handScale,
+      -pose.armPose.rightHandZ * arm.handOverlay * handScale,
+    ),
+    delta,
+    0.24,
+  );
 }
 
 function applyGenericGlbBone(
