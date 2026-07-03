@@ -331,9 +331,11 @@ async def voice_stream(websocket: WebSocket) -> None:
         token = str(state.get("activeUtteranceId") or next_utterance_id())
 
         async def run_when_stable() -> None:
+            nonlocal turn_task
             try:
                 await asyncio.sleep(delay)
                 if token == state.get("activeUtteranceId"):
+                    turn_task = None
                     await process_buffered_utterance(reason)
             except asyncio.CancelledError:
                 return

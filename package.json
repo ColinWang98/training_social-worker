@@ -29,6 +29,7 @@
     "avatar:expression:test": "python3 scripts/expression-policy-test.py",
     "voice:policy:test": "python3 scripts/voice-policy-test.py",
     "voice:tts:smoke": ".venv-adk/bin/python scripts/tts-smoke-test.py",
+    "voice:stream:test": ".venv-adk/bin/python scripts/voice-stream-state-test.py",
     "vrm:arkit": "node scripts/generate-arkit-proxy-vrm.mjs",
     "vrm:inspect": "node scripts/inspect-vrm-blendshapes.mjs",
     "supabase:import": ".venv-adk/bin/python scripts/import-sqlite-corpus-to-supabase.py",
