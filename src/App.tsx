@@ -78,6 +78,7 @@ export type AvatarMotionDebug = {
   reactionReason: string;
   expressionPhase: string;
   expressionOverlayWeight: number;
+  motionScale: number;
   mixamoClipId?: string;
   mixamoStatus?: string;
   mixamoWeight?: number;
@@ -85,6 +86,33 @@ export type AvatarMotionDebug = {
   bridgeProgress: number;
   recentMotionHistory: string[];
   seatedSafety: string;
+};
+
+export type VoiceTimingDebug = {
+  micStartedAtMs: number;
+  connectionOpenMs?: number;
+  listeningReadyMs?: number;
+  firstPartialMs?: number;
+  lastPartialMs?: number;
+  asrFinalMs?: number;
+  commitRequestedMs?: number;
+  committedMs?: number;
+  turnStartedMs?: number;
+  clientResponseMs?: number;
+  ttsReadyMs?: number;
+  audioPlayStartMs?: number;
+  lastServerElapsedMs?: number;
+  streamRestartCount: number;
+  bargeInCount: number;
+  lastCommitReason?: string;
+  lastTranscriptLength: number;
+};
+
+const emptyVoiceTiming: VoiceTimingDebug = {
+  micStartedAtMs: 0,
+  streamRestartCount: 0,
+  bargeInCount: 0,
+  lastTranscriptLength: 0,
 };
 
 export default function App() {
@@ -114,6 +142,7 @@ export default function App() {
   const [partialTranscript, setPartialTranscript] = useState('');
   const [finalTranscript, setFinalTranscript] = useState('');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceTiming, setVoiceTiming] = useState<VoiceTimingDebug>(emptyVoiceTiming);
   const [speechLevel, setSpeechLevel] = useState(0);
   const [isShutdownPending, setIsShutdownPending] = useState(false);
   const [visemePlayback, setVisemePlayback] = useState({
@@ -144,6 +173,7 @@ export default function App() {
   const bargeInSentRef = useRef(false);
   const voiceCommitTimerRef = useRef<number | null>(null);
   const voiceStatusRef = useRef<VoiceStatus>(voiceStatus);
+  const voiceTimingStartedAtRef = useRef(0);
   const selectedAvatar = useMemo(
     () => avatarAssets.find((asset) => asset.id === avatarAssetId) ?? avatarAssets[0],
     [avatarAssetId],
@@ -197,6 +227,16 @@ export default function App() {
       wsRef.current.send(JSON.stringify({ type: 'response_language', responseLanguage }));
     }
   }, [responseLanguage]);
+
+  const voiceElapsedMs = useCallback(() => (
+    voiceTimingStartedAtRef.current
+      ? Math.round(performance.now() - voiceTimingStartedAtRef.current)
+      : 0
+  ), []);
+
+  const serverElapsedMs = (message: Record<string, unknown>) => (
+    typeof message.serverElapsedMs === 'number' ? Math.round(message.serverElapsedMs) : undefined
+  );
 
   const stopPlayback = useCallback(() => {
     if (audioElementRef.current) {
@@ -317,6 +357,10 @@ export default function App() {
     }
 
     audio.onplay = () => {
+      setVoiceTiming((current) => ({
+        ...current,
+        audioPlayStartMs: voiceElapsedMs(),
+      }));
       setVisemePlayback({
         text,
         startedAtMs: performance.now(),
@@ -340,7 +384,7 @@ export default function App() {
       setVoiceStatus(wsRef.current?.readyState === WebSocket.OPEN ? 'listening' : 'idle');
     };
     await audio.play();
-  }, [responseLanguage, stopPlayback]);
+  }, [responseLanguage, stopPlayback, voiceElapsedMs]);
 
   const playTtsForResponse = useCallback(async (response: ClientResponse) => {
     const text = response.avatarDirective?.ttsText || response.clientText;
@@ -430,8 +474,13 @@ export default function App() {
 
   const sendVoiceCommit = useCallback((reason: string) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    setVoiceTiming((current) => ({
+      ...current,
+      commitRequestedMs: voiceElapsedMs(),
+      lastCommitReason: reason,
+    }));
     wsRef.current.send(JSON.stringify({ type: 'commit_utterance', reason }));
-  }, []);
+  }, [voiceElapsedMs]);
 
   const scheduleVoiceCommit = useCallback((reason: string, delayMs = 760) => {
     clearVoiceCommitTimer();
@@ -507,6 +556,11 @@ export default function App() {
     setVoiceError(null);
     setPartialTranscript('');
     setFinalTranscript('');
+    voiceTimingStartedAtRef.current = performance.now();
+    setVoiceTiming({
+      ...emptyVoiceTiming,
+      micStartedAtMs: Math.round(voiceTimingStartedAtRef.current),
+    });
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -535,6 +589,10 @@ export default function App() {
       wsRef.current = socket;
 
       socket.onopen = () => {
+        setVoiceTiming((current) => ({
+          ...current,
+          connectionOpenMs: voiceElapsedMs(),
+        }));
         lastAsrSeqRef.current = 0;
         lastVoiceTranscriptRef.current = '';
         setPartialTranscript('');
@@ -565,6 +623,12 @@ export default function App() {
         if (message.type === 'voice_ready' || message.type === 'listening_ready') {
           clearVoiceCommitTimer();
           bargeInSentRef.current = false;
+          setVoiceTiming((current) => ({
+            ...current,
+            listeningReadyMs: message.type === 'listening_ready' ? voiceElapsedMs() : current.listeningReadyMs,
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+            streamRestartCount: typeof message.streamRestartCount === 'number' ? message.streamRestartCount : current.streamRestartCount,
+          }));
           setVoiceStatus((status) => (
             status === 'generating' || status === 'avatar_speaking' || status === 'committing'
               ? status
@@ -580,6 +644,17 @@ export default function App() {
         }
         if (message.type === 'asr_partial') {
           const transcript = message.transcript ?? '';
+          setVoiceTiming((current) => {
+            const elapsed = voiceElapsedMs();
+            return {
+              ...current,
+              firstPartialMs: current.firstPartialMs ?? elapsed,
+              lastPartialMs: elapsed,
+              lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+              streamRestartCount: typeof message.streamRestartCount === 'number' ? message.streamRestartCount : current.streamRestartCount,
+              lastTranscriptLength: String(transcript).trim().length,
+            };
+          });
           setPartialTranscript(transcript);
           if (
             (voiceStatusRef.current === 'avatar_speaking' || voiceStatusRef.current === 'generating') &&
@@ -589,19 +664,29 @@ export default function App() {
             bargeInSentRef.current = true;
             stopPlayback();
             wsRef.current?.send(JSON.stringify({ type: 'barge_in', utteranceId: message.utteranceId }));
+            setVoiceTiming((current) => ({
+              ...current,
+              bargeInCount: current.bargeInCount + 1,
+            }));
             setVoiceStatus('interrupted');
-            scheduleVoiceCommit('client_silence_after_barge_in', 720);
+            scheduleVoiceCommit('client_silence_after_barge_in', responseLanguage === 'cantonese' ? 620 : 760);
             return;
           }
           setVoiceStatus('user_speaking');
           if (transcript.trim().length >= 2) {
-            scheduleVoiceCommit('client_silence', 760);
+            scheduleVoiceCommit('client_silence', responseLanguage === 'cantonese' ? 620 : 780);
           }
           return;
         }
         if (message.type === 'asr_final') {
           clearVoiceCommitTimer();
           const transcript = message.transcript ?? '';
+          setVoiceTiming((current) => ({
+            ...current,
+            asrFinalMs: voiceElapsedMs(),
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+            lastTranscriptLength: String(transcript).trim().length,
+          }));
           lastVoiceTranscriptRef.current = transcript;
           setFinalTranscript(transcript);
           setPartialTranscript('');
@@ -612,6 +697,13 @@ export default function App() {
         if (message.type === 'utterance_committed') {
           clearVoiceCommitTimer();
           const transcript = message.transcript ?? '';
+          setVoiceTiming((current) => ({
+            ...current,
+            committedMs: voiceElapsedMs(),
+            lastCommitReason: typeof message.reason === 'string' ? message.reason : current.lastCommitReason,
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+            lastTranscriptLength: String(transcript).trim().length,
+          }));
           if (transcript) {
             lastVoiceTranscriptRef.current = transcript;
             setInputValue(transcript);
@@ -620,6 +712,10 @@ export default function App() {
           return;
         }
         if (message.type === 'barge_in_ack') {
+          setVoiceTiming((current) => ({
+            ...current,
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+          }));
           setVoiceStatus('interrupted');
           return;
         }
@@ -630,11 +726,21 @@ export default function App() {
         }
         if (message.type === 'turn_started') {
           clearVoiceCommitTimer();
+          setVoiceTiming((current) => ({
+            ...current,
+            turnStartedMs: voiceElapsedMs(),
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+          }));
           setVoiceStatus('generating');
           return;
         }
         if (message.type === 'client_response') {
           const response = message.response as ClientResponse;
+          setVoiceTiming((current) => ({
+            ...current,
+            clientResponseMs: voiceElapsedMs(),
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+          }));
           const studentText = lastVoiceTranscriptRef.current || finalTranscript || partialTranscript || inputValue;
           lastVoiceTtsTextRef.current = response.avatarDirective?.ttsText || response.clientText;
           suppressAutoTtsRef.current = true;
@@ -642,6 +748,11 @@ export default function App() {
           return;
         }
         if (message.type === 'tts_audio') {
+          setVoiceTiming((current) => ({
+            ...current,
+            ttsReadyMs: voiceElapsedMs(),
+            lastServerElapsedMs: serverElapsedMs(message) ?? current.lastServerElapsedMs,
+          }));
           void playTtsAudio({
             mimeType: message.mimeType,
             audioBase64: message.audioBase64,
@@ -685,7 +796,7 @@ export default function App() {
       setVoiceError(error instanceof Error ? error.message : responseLanguage === 'english' ? 'Unable to start the microphone.' : '無法啟動麥克風。');
       setVoiceStatus('error');
     }
-  }, [clearVoiceCommitTimer, commitClientResponse, finalTranscript, inputValue, isPending, partialTranscript, playTtsAudio, responseLanguage, scheduleVoiceCommit, selectedAvatar.ttsVoice, simulationMethod, stopPlayback, stopVoiceCapture, voiceEnabled]);
+  }, [clearVoiceCommitTimer, commitClientResponse, finalTranscript, inputValue, isPending, partialTranscript, playTtsAudio, responseLanguage, scheduleVoiceCommit, selectedAvatar.ttsVoice, simulationMethod, stopPlayback, stopVoiceCapture, voiceElapsedMs, voiceEnabled]);
 
   const stopCurrentUtterance = useCallback(() => {
     clearVoiceCommitTimer();
@@ -710,6 +821,8 @@ export default function App() {
     setSessionId(null);
     setPartialTranscript('');
     setFinalTranscript('');
+    voiceTimingStartedAtRef.current = 0;
+    setVoiceTiming(emptyVoiceTiming);
     setVoiceStatus('idle');
     setVoiceError(null);
   }, [stopPlayback, stopVoiceCapture]);
@@ -928,6 +1041,7 @@ export default function App() {
         statusMessage={statusMessage}
         avatarBlendshapeDebug={avatarBlendshapeDebug}
         avatarMotionDebug={avatarMotionDebug}
+        voiceTimingDebug={voiceTiming}
         postSessionReport={postSessionReport}
         isFinalReviewPending={isFinalReviewPending}
         canEndSession={turns.some((turn) => turn.speaker === 'student') && !sessionEnded}

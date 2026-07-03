@@ -12,7 +12,7 @@ import {
   SimulationMethod,
   TrainingViewMode,
 } from '../lib/interviewTypes';
-import type { AvatarBlendshapeDebug, AvatarMotionDebug } from '../App';
+import type { AvatarBlendshapeDebug, AvatarMotionDebug, VoiceTimingDebug } from '../App';
 import { caseDisplay, motionPrompt, observableLabel, t } from '../lib/i18n';
 
 type CasePanelProps = {
@@ -38,6 +38,7 @@ type CasePanelProps = {
   statusMessage: string;
   avatarBlendshapeDebug: AvatarBlendshapeDebug | null;
   avatarMotionDebug: AvatarMotionDebug | null;
+  voiceTimingDebug: VoiceTimingDebug | null;
   onCaseChange: (caseId: string) => void;
   onEndSession: () => void;
   onSimulationMethodChange: (method: SimulationMethod) => void;
@@ -69,6 +70,7 @@ export function CasePanel({
   statusMessage,
   avatarBlendshapeDebug,
   avatarMotionDebug,
+  voiceTimingDebug,
   onCaseChange,
   onEndSession,
   onSimulationMethodChange,
@@ -473,6 +475,29 @@ export function CasePanel({
           <section className="sideSection">
             <h2>{uiLanguage === 'english' ? 'Avatar Motion' : 'Avatar 動作'}</h2>
             <p className="motionCue">{motionPrompt(uiLanguage, motionCue)}</p>
+            {voiceTimingDebug && (
+              <div className="realismBox" aria-label="Voice timing debug">
+                <h3>{uiLanguage === 'english' ? 'Voice Timing' : '語音 Timing'}</h3>
+                <div className="avatarDirectiveGrid">
+                  <DirectiveItem label="Connect" value={msValue(voiceTimingDebug.connectionOpenMs)} />
+                  <DirectiveItem label="Ready" value={msValue(voiceTimingDebug.listeningReadyMs)} />
+                  <DirectiveItem label="First partial" value={msValue(voiceTimingDebug.firstPartialMs)} />
+                  <DirectiveItem label="Last partial" value={msValue(voiceTimingDebug.lastPartialMs)} />
+                  <DirectiveItem label="ASR final" value={msValue(voiceTimingDebug.asrFinalMs)} />
+                  <DirectiveItem label="Commit request" value={msValue(voiceTimingDebug.commitRequestedMs)} />
+                  <DirectiveItem label="Commit" value={msValue(voiceTimingDebug.committedMs)} />
+                  <DirectiveItem label="Turn started" value={msValue(voiceTimingDebug.turnStartedMs)} />
+                  <DirectiveItem label="Client response" value={msValue(voiceTimingDebug.clientResponseMs)} />
+                  <DirectiveItem label="TTS ready" value={msValue(voiceTimingDebug.ttsReadyMs)} />
+                  <DirectiveItem label="Audio play" value={msValue(voiceTimingDebug.audioPlayStartMs)} />
+                  <DirectiveItem label="Server elapsed" value={msValue(voiceTimingDebug.lastServerElapsedMs)} />
+                  <DirectiveItem label="Commit reason" value={voiceTimingDebug.lastCommitReason ?? 'n/a'} />
+                  <DirectiveItem label="Restarts" value={`${voiceTimingDebug.streamRestartCount}`} />
+                  <DirectiveItem label="Barge-in" value={`${voiceTimingDebug.bargeInCount}`} />
+                  <DirectiveItem label="Transcript chars" value={`${voiceTimingDebug.lastTranscriptLength}`} />
+                </div>
+              </div>
+            )}
             {avatarBlendshapeDebug && (
               <div className="realismBox" aria-label="Blendshape debug">
                 <h3>Blendshape Debug</h3>
@@ -522,6 +547,7 @@ export function CasePanel({
                   <DirectiveItem label="Reason" value={avatarMotionDebug.reactionReason} />
                   <DirectiveItem label="Expression Phase" value={avatarMotionDebug.expressionPhase} />
                   <DirectiveItem label="Expression Overlay" value={`${Math.round(avatarMotionDebug.expressionOverlayWeight * 100)}%`} />
+                  <DirectiveItem label="Motion Scale" value={`${Math.round(avatarMotionDebug.motionScale * 100)}%`} />
                   <DirectiveItem label="Mixamo" value={avatarMotionDebug.mixamoStatus ?? 'off'} />
                   <DirectiveItem label="Mixamo Clip" value={avatarMotionDebug.mixamoClipId ?? 'none'} />
                   <DirectiveItem label="Mixamo Weight" value={`${Math.round((avatarMotionDebug.mixamoWeight ?? 0) * 100)}%`} />
@@ -1096,4 +1122,8 @@ function TagRow({ label, values }: { label: string; values: string[] }) {
       </div>
     </div>
   );
+}
+
+function msValue(value?: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}ms` : 'n/a';
 }

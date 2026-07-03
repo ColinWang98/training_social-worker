@@ -145,11 +145,21 @@ def main() -> None:
         tts_genders = [item.get("voiceGender") for item in seen if item.get("type") == "tts_audio"]
         if tts_genders[:2] != ["male", "male"]:
             raise AssertionError(f"Unexpected TTS genders: {tts_genders}")
+        timed_events = [
+            item.get("type")
+            for item in seen
+            if item.get("type") in {"asr_final", "utterance_committed", "turn_started", "client_response", "tts_audio"}
+            and isinstance(item.get("serverElapsedMs"), int)
+        ]
+        for required_event in ["asr_final", "utterance_committed", "turn_started", "client_response", "tts_audio"]:
+            if required_event not in timed_events:
+                raise AssertionError(f"Missing serverElapsedMs on {required_event}: {seen}")
         print({
             "ok": True,
             "processedTranscripts": fake.student_texts,
             "committedTranscripts": committed,
             "clientResponses": client_texts,
+            "timedEvents": timed_events,
             "eventCount": len(seen),
         })
     finally:

@@ -11,6 +11,7 @@
     "adk:dev": ".venv-adk/bin/python -m uvicorn adk_service.main:app --host 127.0.0.1 --port 8765",
     "adk:smoke": "python3 scripts/adk-smoke-test.py",
     "smoke:sessions": "python3 scripts/session-smoke-test.py",
+    "smoke:immersion": "python3 scripts/immersion-smoke-test.py",
     "smoke:methods": "python3 scripts/method-smoke-test.py",
     "evaluate:sessions": "python3 scripts/evaluate-session.py",
     "session:export": "python3 scripts/export-session.py",

@@ -1175,29 +1175,36 @@ function createSeatedMotionScriptController() {
       const nextReactionId = plan?.reactionInstanceId ?? reactionKey;
       if (nextReactionId && nextReactionId !== activeReactionId) {
         activeReactionId = nextReactionId;
-        const family = plan?.reactionFamily ?? 'soft_engagement';
-        const seed = plan?.variantSeed ?? plan?.reactionInstanceId ?? reactionKey;
-        const template = plan?.motionScript
-          ? {
-              id: plan.motionScriptId ?? `custom_${family}`,
-              script: plan.motionScript,
-              variant: 'custom',
-            }
-          : seatedMotionScriptTemplate(family, {
-              seed,
-              intensity: plan?.motionScale ?? activeIntensity,
-            });
-        const result = compileSeatedMotionScript(template.script, {
-          id: plan?.motionScript ? plan?.motionScriptId ?? template.id : template.id,
-          language: plan?.motionLanguage ?? 'seated-v1',
-        });
-        activeScriptId = plan?.motionScript ? plan?.motionScriptId ?? template.id : template.id;
-        activeVariant = template.variant;
-        validationIssues = result.issues.map((issue) => issue.message);
-        activeProgram = result.ok ? result.program : null;
-        if (activeProgram) {
-          recentMotionHistory.unshift(activeProgram.id);
-          recentMotionHistory.splice(5);
+        if (plan?.idleMixOnly) {
+          activeProgram = null;
+          activeScriptId = 'idle_mix_only';
+          activeVariant = 'idle';
+          validationIssues = [];
+        } else {
+          const family = plan?.reactionFamily ?? 'soft_engagement';
+          const seed = plan?.variantSeed ?? plan?.reactionInstanceId ?? reactionKey;
+          const template = plan?.motionScript
+            ? {
+                id: plan.motionScriptId ?? `custom_${family}`,
+                script: plan.motionScript,
+                variant: 'custom',
+              }
+            : seatedMotionScriptTemplate(family, {
+                seed,
+                intensity: plan?.motionScale ?? activeIntensity,
+              });
+          const result = compileSeatedMotionScript(template.script, {
+            id: plan?.motionScript ? plan?.motionScriptId ?? template.id : template.id,
+            language: plan?.motionLanguage ?? 'seated-v1',
+          });
+          activeScriptId = plan?.motionScript ? plan?.motionScriptId ?? template.id : template.id;
+          activeVariant = template.variant;
+          validationIssues = result.issues.map((issue) => issue.message);
+          activeProgram = result.ok ? result.program : null;
+          if (activeProgram) {
+            recentMotionHistory.unshift(activeProgram.id);
+            recentMotionHistory.splice(5);
+          }
         }
       }
 
@@ -1224,6 +1231,7 @@ function createSeatedMotionScriptController() {
         reactionReason: plan?.reactionReason ?? 'idle',
         expressionPhase: 'idle',
         expressionOverlayWeight: 0,
+        motionScale: performanceState.motionScale,
         reactionWeight: performanceState.reactionWeight,
         bridgeProgress: performanceState.bridgeProgress,
         recentMotionHistory: [...recentMotionHistory],
@@ -1625,7 +1633,7 @@ function selectIdlePhrase(
   const energyRank: Record<MotionEnergy, number> = { low: 0, medium: 1, high: 2 };
   const candidates = IDLE_PHRASES.filter((phrase) =>
     phrase.families.includes(family) &&
-    !recent.slice(0, 3).includes(phrase.id) &&
+    !recent.slice(0, 5).includes(phrase.id) &&
     energyRank[phrase.energy] <= Math.max(1, energyRank[motionEnergy]),
   );
   const pool = candidates.length ? candidates : IDLE_PHRASES.filter((phrase) => phrase.families.includes(family));
@@ -2315,7 +2323,6 @@ function expressionOverlayForPerformance(
   state: AvatarPerformanceState,
   idlePhraseId: string,
 ): { weights: ArkitBlendshapeWeights; phase: string; weight: number } {
-  const family = plan?.reactionFamily ?? 'soft_engagement';
   let phase = 'idle';
   let weight = 0;
   if (state.attackWeight > 0.001) {
@@ -2342,6 +2349,9 @@ function expressionOverlayForPerformance(
     weight = idlePhraseExpressionWeight(idlePhraseId);
   }
 
+  const family = (phase === 'idle' || plan?.idleMixOnly)
+    ? plan?.idleAccentFamily ?? plan?.reactionFamily ?? 'soft_engagement'
+    : plan?.reactionFamily ?? plan?.idleAccentFamily ?? 'soft_engagement';
   const scaled = Math.min(0.7, Math.max(0, weight));
   return {
     weights: motionExpressionWeights(family, idlePhraseId, scaled),

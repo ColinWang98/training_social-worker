@@ -5,7 +5,9 @@ import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
 const sourcePath = path.resolve('src/lib/seatedMotionLanguage.ts');
+const vrmStagePath = path.resolve('src/components/VrmStage.tsx');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const stageSource = fs.readFileSync(vrmStagePath, 'utf8');
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ES2020,
@@ -101,8 +103,26 @@ for (const invalidCase of invalidCases) {
   assert(!result.ok, `${invalidCase.label} should fail validation.`);
 }
 
+const requiredIdlePhrases = [
+  'soft_gaze_shift',
+  'shoulder_settle',
+  'small_inhale_exhale',
+  'lap_hand_settle',
+  'finger_micro_fidget',
+  'downward_glance',
+  'guarded_scan',
+  'soft_half_nod',
+  'listening_stillness',
+];
+for (const phrase of requiredIdlePhrases) {
+  assert(stageSource.includes(`'${phrase}'`), `VrmStage should include idle phrase ${phrase}.`);
+}
+assert(stageSource.includes('recent.slice(0, 5)'), 'Idle phrase cooldown should avoid the last five phrases.');
+assert(stageSource.includes("activeScriptId = 'idle_mix_only'"), 'Idle-only turns should not report an active reaction script.');
+assert(stageSource.includes('plan?.idleAccentFamily ?? plan?.reactionFamily'), 'Idle expression overlay should prefer idleAccentFamily.');
+
 fs.unlinkSync(tempPath);
-console.log(`Validated ${families.length} seated motion templates and ${invalidCases.length} invalid cases.`);
+console.log(`Validated ${families.length} seated motion templates, ${invalidCases.length} invalid cases, and ${requiredIdlePhrases.length} idle phrase requirements.`);
 
 function assert(condition, message) {
   if (!condition) {

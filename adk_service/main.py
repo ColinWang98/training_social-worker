@@ -154,7 +154,19 @@ async def voice_stream(websocket: WebSocket) -> None:
         "streamRestartCount": 0,
         "ignoreNextStreamEnded": False,
         "queuedUtterances": [],
+        "voiceStartedAt": 0.0,
     }
+
+    def with_server_timing(event: dict[str, Any]) -> dict[str, Any]:
+        started_at = float(state.get("voiceStartedAt") or 0)
+        elapsed_ms = 0
+        if started_at:
+            elapsed_ms = int(max(0, (asyncio.get_running_loop().time() - started_at) * 1000))
+        return {
+            **event,
+            "serverElapsedMs": elapsed_ms,
+            "streamRestartCount": int(state.get("streamRestartCount") or 0),
+        }
 
     def queue_utterance(transcript: str, utterance_id: str, reason: str) -> None:
         queued = state.get("queuedUtterances")
@@ -186,17 +198,17 @@ async def voice_stream(websocket: WebSocket) -> None:
         history = state.get("history") if isinstance(state.get("history"), list) else []
         if not isinstance(case_profile, dict):
             state["processingTurn"] = False
-            await websocket.send_json({"type": "error", "message": "caseProfile is required before ASR final.", "recoverable": True})
+            await websocket.send_json(with_server_timing({"type": "error", "message": "caseProfile is required before ASR final.", "recoverable": True}))
             return
 
         try:
-            await websocket.send_json({
+            await websocket.send_json(with_server_timing({
                 "type": "utterance_committed",
                 "utteranceId": utterance_id,
                 "transcript": transcript,
                 "reason": reason,
-            })
-            await websocket.send_json({"type": "turn_started", "studentText": transcript})
+            }))
+            await websocket.send_json(with_server_timing({"type": "turn_started", "studentText": transcript}))
             payload = {
                 "caseProfile": case_profile,
                 "studentText": transcript,
@@ -207,9 +219,9 @@ async def voice_stream(websocket: WebSocket) -> None:
                 "responseLanguage": state.get("responseLanguage"),
             }
             response = await coordinator.interview_turn(payload)
-            await websocket.send_json({"type": "client_response", "response": response})
+            await websocket.send_json(with_server_timing({"type": "client_response", "response": response}))
             if response.get("avatarDirective"):
-                await websocket.send_json({"type": "avatar_directive", "avatarDirective": response["avatarDirective"]})
+                await websocket.send_json(with_server_timing({"type": "avatar_directive", "avatarDirective": response["avatarDirective"]}))
 
             state["history"] = [
                 *history,
@@ -221,7 +233,7 @@ async def voice_stream(websocket: WebSocket) -> None:
             text = response.get("avatarDirective", {}).get("ttsText") or response.get("clientText")
             try:
                 if response_barge_seq != int(state.get("bargeInSeq") or 0):
-                    await websocket.send_json({"type": "avatar_speech_cancelled"})
+                    await websocket.send_json(with_server_timing({"type": "avatar_speech_cancelled"}))
                     return
                 tts_response = coordinator.synthesize_tts(
                     {
@@ -233,12 +245,12 @@ async def voice_stream(websocket: WebSocket) -> None:
                     }
                 )
                 if response_barge_seq != int(state.get("bargeInSeq") or 0):
-                    await websocket.send_json({"type": "avatar_speech_cancelled"})
+                    await websocket.send_json(with_server_timing({"type": "avatar_speech_cancelled"}))
                     return
                 state["assistantSpeaking"] = True
-                await websocket.send_json({"type": "tts_audio", **tts_response})
+                await websocket.send_json(with_server_timing({"type": "tts_audio", **tts_response}))
             except Exception as exc:
-                await websocket.send_json({"type": "error", "message": f"TTS failed: {exc}", "recoverable": True})
+                await websocket.send_json(with_server_timing({"type": "error", "message": f"TTS failed: {exc}", "recoverable": True}))
         finally:
             state["processingTurn"] = False
             queued = state.get("queuedUtterances") if isinstance(state.get("queuedUtterances"), list) else []
@@ -308,12 +320,12 @@ async def voice_stream(websocket: WebSocket) -> None:
         state["activeUtteranceId"] = ""
         if not transcript:
             return False
-        await websocket.send_json({
+        await websocket.send_json(with_server_timing({
             "type": "asr_final",
             "transcript": transcript,
             "utteranceSeq": next_display_seq(),
             "utteranceId": utterance_id,
-        })
+        }))
         await process_final_transcript(transcript, utterance_id, reason)
         return True
 
@@ -356,9 +368,9 @@ async def voice_stream(websocket: WebSocket) -> None:
         try:
             speech_session = coordinator.start_speech_stream(int(state.get("sampleRate") or 16000), event_queue, loop)
             state["streamId"] = f"stream-{uuid.uuid4().hex[:12]}"
-            await websocket.send_json({"type": "listening_ready", "streamId": state["streamId"]})
+            await websocket.send_json(with_server_timing({"type": "listening_ready", "streamId": state["streamId"]}))
         except Exception as exc:
-            await websocket.send_json({"type": "error", "message": str(exc), "recoverable": True})
+            await websocket.send_json(with_server_timing({"type": "error", "message": str(exc), "recoverable": True}))
 
     async def forward_speech_events() -> None:
         while True:
@@ -371,12 +383,12 @@ async def voice_stream(websocket: WebSocket) -> None:
                     if partial_text and (partial_text.startswith(final_text) or len(partial_text) > len(final_text) + 2):
                         state["latestPartial"] = partial_text
                         utterance_id = str(state.get("activeUtteranceId") or next_utterance_id())
-                        await websocket.send_json({
+                        await websocket.send_json(with_server_timing({
                             "type": "asr_partial",
                             "transcript": buffered_transcript_for_display(),
                             "utteranceSeq": next_display_seq(),
                             "utteranceId": utterance_id,
-                        })
+                        }))
                         schedule_turn_processing(0.55, "silence")
                     continue
                 cancel_turn_task()
@@ -384,27 +396,27 @@ async def voice_stream(websocket: WebSocket) -> None:
                 utterance_id = str(state.get("activeUtteranceId") or next_utterance_id())
                 state["latestPartial"] = partial_text
                 if is_new_utterance:
-                    await websocket.send_json({"type": "speech_started", "utteranceId": utterance_id})
-                await websocket.send_json({
+                    await websocket.send_json(with_server_timing({"type": "speech_started", "utteranceId": utterance_id}))
+                await websocket.send_json(with_server_timing({
                     "type": "asr_partial",
                     "transcript": buffered_transcript_for_display(),
                     "utteranceSeq": next_display_seq(),
                     "utteranceId": utterance_id,
-                })
+                }))
                 if len(state["latestPartial"]) >= 2:
                     schedule_turn_processing(0.68, "silence")
             elif event_type == "asr_final":
                 utterance_id = str(state.get("activeUtteranceId") or next_utterance_id())
                 append_final_segment(str(event.get("transcript", "")))
-                await websocket.send_json({
+                await websocket.send_json(with_server_timing({
                     "type": "asr_partial",
                     "transcript": buffered_transcript_for_display(),
                     "utteranceSeq": next_display_seq(),
                     "utteranceId": utterance_id,
-                })
+                }))
                 schedule_turn_processing(0.35, "final")
             elif event_type == "error":
-                await websocket.send_json(event)
+                await websocket.send_json(with_server_timing(event))
                 await restart_speech_stream_once("error")
             elif event_type == "stream_ended":
                 if state.get("ignoreNextStreamEnded"):
@@ -442,14 +454,15 @@ async def voice_stream(websocket: WebSocket) -> None:
                 state["streamRestartCount"] = 0
                 state["ignoreNextStreamEnded"] = False
                 state["queuedUtterances"] = []
+                state["voiceStartedAt"] = asyncio.get_running_loop().time()
                 if speech_session:
                     speech_session.stop()
                 try:
                     speech_session = coordinator.start_speech_stream(sample_rate, event_queue, loop)
-                    await websocket.send_json({"type": "voice_ready"})
-                    await websocket.send_json({"type": "listening_ready", "streamId": state["streamId"]})
+                    await websocket.send_json(with_server_timing({"type": "voice_ready"}))
+                    await websocket.send_json(with_server_timing({"type": "listening_ready", "streamId": state["streamId"]}))
                 except Exception as exc:
-                    await websocket.send_json({"type": "error", "message": str(exc), "recoverable": True})
+                    await websocket.send_json(with_server_timing({"type": "error", "message": str(exc), "recoverable": True}))
             elif message_type == "audio":
                 if speech_session:
                     audio_base64 = message.get("audioBase64")
@@ -464,24 +477,24 @@ async def voice_stream(websocket: WebSocket) -> None:
             elif message_type == "stop_utterance":
                 cancel_turn_task()
                 if not await process_buffered_utterance("manual"):
-                    await websocket.send_json({"type": "listening_ready", "streamId": state.get("streamId")})
+                    await websocket.send_json(with_server_timing({"type": "listening_ready", "streamId": state.get("streamId")}))
             elif message_type == "commit_utterance":
                 cancel_turn_task()
                 reason = message.get("reason") if isinstance(message.get("reason"), str) else "manual"
                 if not await process_buffered_utterance(reason):
-                    await websocket.send_json({"type": "listening_ready", "streamId": state.get("streamId")})
+                    await websocket.send_json(with_server_timing({"type": "listening_ready", "streamId": state.get("streamId")}))
             elif message_type == "barge_in":
                 state["bargeInSeq"] = int(state.get("bargeInSeq") or 0) + 1
                 state["assistantSpeaking"] = False
-                await websocket.send_json({"type": "barge_in_ack", "previousResponseId": message.get("utteranceId")})
+                await websocket.send_json(with_server_timing({"type": "barge_in_ack", "previousResponseId": message.get("utteranceId")}))
             elif message_type == "cancel_avatar_speech":
                 state["assistantSpeaking"] = False
-                await websocket.send_json({"type": "avatar_speech_cancelled"})
+                await websocket.send_json(with_server_timing({"type": "avatar_speech_cancelled"}))
             elif message_type == "cancel":
                 if speech_session:
                     speech_session.stop()
                     speech_session = None
-                await websocket.send_json({"type": "cancelled"})
+                await websocket.send_json(with_server_timing({"type": "cancelled"}))
     except WebSocketDisconnect:
         pass
     finally:
