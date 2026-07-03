@@ -76,8 +76,14 @@ APP_AUTH_SECRET=random-32-byte-secret
 GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_STT_LANGUAGE=yue-Hant-HK
+GOOGLE_STT_MODEL=google-stt-v1-auto
 GOOGLE_TTS_LANGUAGE=yue-HK
-GOOGLE_TTS_VOICE=yue-HK-Chirp3-HD-Achird
+GOOGLE_TTS_VOICE=yue-HK-Standard-D
+GOOGLE_TTS_MALE_VOICES=yue-HK-Standard-D,yue-HK-Standard-B,yue-HK-Wavenet-D,yue-HK-Wavenet-B,yue-HK-Chirp3-HD-Achird
+GOOGLE_TTS_EN_LANGUAGE=en-US
+GOOGLE_TTS_EN_VOICE=en-US-Wavenet-D
+GOOGLE_TTS_EN_MALE_VOICES=en-US-Wavenet-D,en-US-Neural2-D,en-US-Standard-D,en-US-Chirp3-HD-Charon
+GOOGLE_TTS_RATE_VARIATION_ENABLED=true
 GOOGLE_VOICE_ENABLED=true
 ```
 
@@ -290,8 +296,14 @@ For Cantonese speech input/output, add Google credentials and enable voice:
 GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_STT_LANGUAGE=yue-Hant-HK
+GOOGLE_STT_MODEL=google-stt-v1-auto
 GOOGLE_TTS_LANGUAGE=yue-HK
-GOOGLE_TTS_VOICE=yue-HK-Chirp3-HD-Achird
+GOOGLE_TTS_VOICE=yue-HK-Standard-D
+GOOGLE_TTS_MALE_VOICES=yue-HK-Standard-D,yue-HK-Standard-B,yue-HK-Wavenet-D,yue-HK-Wavenet-B,yue-HK-Chirp3-HD-Achird
+GOOGLE_TTS_EN_LANGUAGE=en-US
+GOOGLE_TTS_EN_VOICE=en-US-Wavenet-D
+GOOGLE_TTS_EN_MALE_VOICES=en-US-Wavenet-D,en-US-Neural2-D,en-US-Standard-D,en-US-Chirp3-HD-Charon
+GOOGLE_TTS_RATE_VARIATION_ENABLED=true
 GOOGLE_VOICE_ENABLED=true
 ```
 

@@ -142,6 +142,7 @@ export default function App() {
   const lastAsrSeqRef = useRef(0);
   const lastVoiceTtsTextRef = useRef('');
   const bargeInSentRef = useRef(false);
+  const voiceCommitTimerRef = useRef<number | null>(null);
   const voiceStatusRef = useRef<VoiceStatus>(voiceStatus);
   const selectedAvatar = useMemo(
     () => avatarAssets.find((asset) => asset.id === avatarAssetId) ?? avatarAssets[0],
@@ -225,6 +226,8 @@ export default function App() {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(response.clientText);
     utterance.lang = responseLanguage === 'english' ? 'en-US' : 'zh-HK';
+    const browserVoice = pickBrowserMaleVoice(responseLanguage);
+    if (browserVoice) utterance.voice = browserVoice;
     if (response.affect === 'anxious') {
       utterance.rate = 1.12;
     } else if (response.affect === 'withdrawn' || response.affect === 'sad' || response.affect === 'ashamed') {
@@ -234,7 +237,7 @@ export default function App() {
     } else {
       utterance.rate = 1.04;
     }
-    utterance.pitch = response.affect === 'withdrawn' || response.affect === 'sad' ? 0.82 : 0.95;
+    utterance.pitch = response.affect === 'withdrawn' || response.affect === 'sad' ? 0.72 : 0.84;
     utterance.onstart = () => {
       const text = response.avatarDirective?.ttsText || response.clientText;
       bargeInSentRef.current = false;
@@ -418,7 +421,31 @@ export default function App() {
     setTurns(nextHistory);
   }, []);
 
+  const clearVoiceCommitTimer = useCallback(() => {
+    if (voiceCommitTimerRef.current !== null) {
+      window.clearTimeout(voiceCommitTimerRef.current);
+      voiceCommitTimerRef.current = null;
+    }
+  }, []);
+
+  const sendVoiceCommit = useCallback((reason: string) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'commit_utterance', reason }));
+  }, []);
+
+  const scheduleVoiceCommit = useCallback((reason: string, delayMs = 760) => {
+    clearVoiceCommitTimer();
+    voiceCommitTimerRef.current = window.setTimeout(() => {
+      voiceCommitTimerRef.current = null;
+      const status = voiceStatusRef.current;
+      if (status === 'user_speaking' || status === 'interrupted' || status === 'listening') {
+        sendVoiceCommit(reason);
+      }
+    }, delayMs);
+  }, [clearVoiceCommitTimer, sendVoiceCommit]);
+
   const stopVoiceCapture = useCallback(() => {
+    clearVoiceCommitTimer();
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -442,7 +469,7 @@ export default function App() {
     setVoiceEnabled(false);
     setPartialTranscript('');
     setVoiceStatus((status) => (status === 'avatar_speaking' ? 'idle' : status === 'error' ? 'error' : 'idle'));
-  }, []);
+  }, [clearVoiceCommitTimer]);
 
   const shutdownServices = useCallback(async () => {
     if (isShutdownPending) return;
@@ -536,6 +563,7 @@ export default function App() {
           lastAsrSeqRef.current = asrSeq;
         }
         if (message.type === 'voice_ready' || message.type === 'listening_ready') {
+          clearVoiceCommitTimer();
           bargeInSentRef.current = false;
           setVoiceStatus((status) => (
             status === 'generating' || status === 'avatar_speaking' || status === 'committing'
@@ -562,12 +590,17 @@ export default function App() {
             stopPlayback();
             wsRef.current?.send(JSON.stringify({ type: 'barge_in', utteranceId: message.utteranceId }));
             setVoiceStatus('interrupted');
+            scheduleVoiceCommit('client_silence_after_barge_in', 720);
             return;
           }
           setVoiceStatus('user_speaking');
+          if (transcript.trim().length >= 2) {
+            scheduleVoiceCommit('client_silence', 760);
+          }
           return;
         }
         if (message.type === 'asr_final') {
+          clearVoiceCommitTimer();
           const transcript = message.transcript ?? '';
           lastVoiceTranscriptRef.current = transcript;
           setFinalTranscript(transcript);
@@ -577,6 +610,7 @@ export default function App() {
           return;
         }
         if (message.type === 'utterance_committed') {
+          clearVoiceCommitTimer();
           const transcript = message.transcript ?? '';
           if (transcript) {
             lastVoiceTranscriptRef.current = transcript;
@@ -595,6 +629,7 @@ export default function App() {
           return;
         }
         if (message.type === 'turn_started') {
+          clearVoiceCommitTimer();
           setVoiceStatus('generating');
           return;
         }
@@ -650,12 +685,13 @@ export default function App() {
       setVoiceError(error instanceof Error ? error.message : responseLanguage === 'english' ? 'Unable to start the microphone.' : '無法啟動麥克風。');
       setVoiceStatus('error');
     }
-  }, [commitClientResponse, finalTranscript, inputValue, isPending, partialTranscript, playTtsAudio, responseLanguage, selectedAvatar.ttsVoice, simulationMethod, stopPlayback, stopVoiceCapture, voiceEnabled]);
+  }, [clearVoiceCommitTimer, commitClientResponse, finalTranscript, inputValue, isPending, partialTranscript, playTtsAudio, responseLanguage, scheduleVoiceCommit, selectedAvatar.ttsVoice, simulationMethod, stopPlayback, stopVoiceCapture, voiceEnabled]);
 
   const stopCurrentUtterance = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: 'commit_utterance', reason: 'manual' }));
+    clearVoiceCommitTimer();
+    sendVoiceCommit('manual');
     setVoiceStatus('committing');
-  }, []);
+  }, [clearVoiceCommitTimer, sendVoiceCommit]);
 
   const handleCaseChange = useCallback((caseId: string) => {
     const nextCase = caseProfiles.find((profile) => profile.id === caseId);
@@ -936,6 +972,19 @@ function estimateSpeechDuration(text: string, language: ResponseLanguage) {
     return Math.max(900, Math.min(14000, wordCount * 360 + 450));
   }
   return estimateCantoneseSpeechDuration(text);
+}
+
+function pickBrowserMaleVoice(language: ResponseLanguage) {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  const languagePrefix = language === 'english' ? 'en' : 'zh';
+  const maleNamePattern = /(male|男|alex|daniel|david|fred|google uk english male|microsoft.*(guy|david|mark|george))/i;
+  const femaleNamePattern = /(female|女|samantha|victoria|zira|susan|karen|moira|tessa|mei-jia|ting-ting)/i;
+  return voices.find((voice) =>
+    voice.lang.toLowerCase().startsWith(languagePrefix) &&
+    maleNamePattern.test(voice.name) &&
+    !femaleNamePattern.test(voice.name),
+  ) ?? null;
 }
 
 function shouldTriggerBargeIn(transcript: string, ttsText: string) {

@@ -27,6 +27,8 @@
     "avatar:lip:test": "node scripts/validate-avatar-lipsync.mjs",
     "avatar:streamoji:test": "node scripts/validate-streamoji-runtime.mjs",
     "avatar:expression:test": "python3 scripts/expression-policy-test.py",
+    "voice:policy:test": "python3 scripts/voice-policy-test.py",
+    "voice:tts:smoke": ".venv-adk/bin/python scripts/tts-smoke-test.py",
     "vrm:arkit": "node scripts/generate-arkit-proxy-vrm.mjs",
     "vrm:inspect": "node scripts/inspect-vrm-blendshapes.mjs",
     "supabase:import": ".venv-adk/bin/python scripts/import-sqlite-corpus-to-supabase.py",

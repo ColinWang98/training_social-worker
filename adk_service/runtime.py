@@ -2186,17 +2186,21 @@ class VoiceSynthesisAgent(ManagedAgent):
             else os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Chirp3-HD-Achird")
         )
         voice_name = voice_override.strip() if isinstance(voice_override, str) and voice_override.strip() else default_voice
-        speaking_rate, pitch = tts_style_for_affect(payload.get("affect"), payload.get("voiceStyle"))
+        speaking_rate, pitch = tts_style_for_affect(payload.get("affect"), payload.get("voiceStyle"), text)
 
         client = texttospeech.TextToSpeechClient()
-        voice_params = {"language_code": language}
-        if voice_name:
-            voice_params["name"] = voice_name
+        voice_candidates = tts_voice_candidates(language_mode, voice_name)
         requested_encoding_name = os.environ.get("GOOGLE_TTS_AUDIO_ENCODING", "MP3").upper()
         encoding_name = "LINEAR16" if self.lip_sync.can_run else requested_encoding_name
         linear16_sample_rate = int(clamp_float(os.environ.get("GOOGLE_TTS_LINEAR16_SAMPLE_RATE", "24000"), 8000, 48000))
 
-        def synthesize_with_encoding(active_encoding_name: str) -> Any:
+        def synthesize_with_encoding(active_encoding_name: str, candidate_voice_name: str | None) -> Any:
+            voice_params = {
+                "language_code": language,
+                "ssml_gender": texttospeech.SsmlVoiceGender.MALE,
+            }
+            if candidate_voice_name:
+                voice_params["name"] = candidate_voice_name
             encoding = getattr(texttospeech.AudioEncoding, active_encoding_name, texttospeech.AudioEncoding.MP3)
             audio_config = {
                 "audio_encoding": encoding,
@@ -2212,23 +2216,43 @@ class VoiceSynthesisAgent(ManagedAgent):
                 audio_config=texttospeech.AudioConfig(**audio_config),
             )
 
-        try:
-            response = synthesize_with_encoding(encoding_name)
-        except Exception:
-            if encoding_name == requested_encoding_name:
-                raise
-            encoding_name = requested_encoding_name
-            response = synthesize_with_encoding(encoding_name)
+        response = None
+        resolved_voice_name = None
+        last_error: Exception | None = None
+        active_encoding_name = encoding_name
+        for candidate_voice_name in voice_candidates:
+            try:
+                active_encoding_name = encoding_name
+                response = synthesize_with_encoding(active_encoding_name, candidate_voice_name)
+                resolved_voice_name = candidate_voice_name
+                break
+            except Exception as exc:
+                last_error = exc
+                if encoding_name == requested_encoding_name:
+                    continue
+                try:
+                    active_encoding_name = requested_encoding_name
+                    response = synthesize_with_encoding(active_encoding_name, candidate_voice_name)
+                    resolved_voice_name = candidate_voice_name
+                    break
+                except Exception as fallback_exc:
+                    last_error = fallback_exc
+                    continue
+        if response is None:
+            if last_error:
+                raise last_error
+            raise RuntimeError("Google TTS did not return audio.")
 
         audio_content = response.audio_content
-        if encoding_name == "LINEAR16":
+        if active_encoding_name == "LINEAR16":
             audio_content = ensure_wav_container(audio_content, linear16_sample_rate)
-        mime_type = "audio/mpeg" if encoding_name == "MP3" else "audio/wav"
+        mime_type = "audio/mpeg" if active_encoding_name == "MP3" else "audio/wav"
         result = {
             "mimeType": mime_type,
             "audioBase64": base64.b64encode(audio_content).decode("ascii"),
             "provider": "google-tts",
-            "voice": voice_name or language,
+            "voice": resolved_voice_name or f"{language}-male",
+            "voiceGender": "male",
         }
         lip_sync = self.lip_sync.analyze(audio_content, text.strip())
         if lip_sync:
@@ -4150,19 +4174,72 @@ def voice_style_for_affect(affect: str) -> str:
     return mapping.get(affect, "neutral")
 
 
-def tts_style_for_affect(affect: Any, voice_style: Any) -> tuple[float, float]:
+def env_csv(name: str, fallback: str) -> list[str]:
+    return [item.strip() for item in os.environ.get(name, fallback).split(",") if item.strip()]
+
+
+def tts_voice_candidates(language_mode: str, requested_voice: str | None) -> list[str | None]:
+    if language_mode == "english":
+        candidates = env_csv(
+            "GOOGLE_TTS_EN_MALE_VOICES",
+            "en-US-Wavenet-D,en-US-Neural2-D,en-US-Standard-D,en-US-Chirp3-HD-Charon",
+        )
+        env_default = os.environ.get("GOOGLE_TTS_EN_VOICE", "en-US-Wavenet-D").strip()
+    else:
+        candidates = env_csv(
+            "GOOGLE_TTS_MALE_VOICES",
+            "yue-HK-Standard-D,yue-HK-Standard-B,yue-HK-Wavenet-D,yue-HK-Wavenet-B,yue-HK-Chirp3-HD-Achird",
+        )
+        env_default = os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Standard-D").strip()
+
+    allow_any_override = os.environ.get("GOOGLE_TTS_ALLOW_ANY_VOICE_OVERRIDE", "").lower() == "true"
+    ordered: list[str | None] = []
+    if isinstance(requested_voice, str) and requested_voice.strip():
+        candidate = requested_voice.strip()
+        if allow_any_override or candidate in candidates:
+            ordered.append(candidate)
+    if env_default and (allow_any_override or env_default in candidates):
+        ordered.append(env_default)
+    ordered.extend(candidates)
+    if os.environ.get("GOOGLE_TTS_ALLOW_UNNAMED_MALE_FALLBACK", "true").lower() == "true":
+        ordered.append(None)
+
+    deduped: list[str | None] = []
+    seen: set[str] = set()
+    for item in ordered:
+        key = item or "__male_default__"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def tts_style_for_affect(affect: Any, voice_style: Any, text: Any = "") -> tuple[float, float]:
     style = str(voice_style or "")
     normalized = normalize_affect(affect)
     rate_multiplier = clamp_float(os.environ.get("GOOGLE_TTS_RATE_MULTIPLIER", "1.0"), 0.75, 1.3)
+    text_value = str(text or "")
     if normalized == "anxious" or "tense_fast" in style:
-        return round(1.12 * rate_multiplier, 2), 0.0
-    if normalized in {"withdrawn", "sad", "ashamed"} or "quiet" in style or "low" in style:
-        return round(1.0 * rate_multiplier, 2), -1.0
+        base_rate, base_pitch = 1.12, 0.0
+    elif normalized in {"withdrawn", "sad", "ashamed"} or "quiet" in style or "low" in style:
+        base_rate, base_pitch = 1.0, -1.0
     if normalized == "irritated" or "short_defensive" in style:
-        return round(1.08 * rate_multiplier, 2), -0.5
-    if normalized == "reflective":
-        return round(1.04 * rate_multiplier, 2), -0.2
-    return round(1.05 * rate_multiplier, 2), 0.0
+        base_rate, base_pitch = 1.08, -0.5
+    elif normalized == "reflective":
+        base_rate, base_pitch = 1.04, -0.2
+    elif normalized not in {"anxious", "withdrawn", "sad", "ashamed", "irritated"}:
+        base_rate, base_pitch = 1.05, 0.0
+
+    if os.environ.get("GOOGLE_TTS_RATE_VARIATION_ENABLED", "true").lower() == "true":
+        seed = sum((index + 1) * ord(char) for index, char in enumerate(text_value[:160]))
+        jitter = ((seed % 7) - 3) * 0.01
+        if "…" in text_value or "..." in text_value:
+            jitter -= 0.015
+        if "?" in text_value or "？" in text_value:
+            jitter += 0.01
+        base_rate += jitter
+    return round(clamp_float(base_rate * rate_multiplier, 0.82, 1.18), 2), round(base_pitch, 2)
 
 
 def ensure_wav_container(audio_content: bytes, sample_rate_hertz: int) -> bytes:

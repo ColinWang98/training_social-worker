@@ -153,7 +153,17 @@ async def voice_stream(websocket: WebSocket) -> None:
         "sampleRate": 16000,
         "streamRestartCount": 0,
         "ignoreNextStreamEnded": False,
+        "queuedUtterances": [],
     }
+
+    def queue_utterance(transcript: str, utterance_id: str, reason: str) -> None:
+        queued = state.get("queuedUtterances")
+        if not isinstance(queued, list):
+            queued = []
+        if queued and queued[-1].get("transcript") == transcript:
+            return
+        queued.append({"transcript": transcript, "utteranceId": utterance_id, "reason": reason})
+        state["queuedUtterances"] = queued[-5:]
 
     async def process_final_transcript(transcript: str, utterance_id: str, reason: str = "final") -> None:
         if not transcript:
@@ -164,7 +174,7 @@ async def voice_stream(websocket: WebSocket) -> None:
         if transcript == state.get("lastProcessedTranscript") and now - float(state.get("lastProcessedAt") or 0) < 3.0:
             return
         if state.get("processingTurn"):
-            schedule_turn_processing(0.45, reason)
+            queue_utterance(transcript, utterance_id, reason)
             return
         state["lastProcessedTranscript"] = transcript
         state["lastProcessedUtteranceId"] = utterance_id
@@ -231,8 +241,17 @@ async def voice_stream(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "error", "message": f"TTS failed: {exc}", "recoverable": True})
         finally:
             state["processingTurn"] = False
-            if buffered_transcript_for_submit():
-                schedule_turn_processing(0.25, "queued")
+            queued = state.get("queuedUtterances") if isinstance(state.get("queuedUtterances"), list) else []
+            if queued:
+                next_item = queued.pop(0)
+                state["queuedUtterances"] = queued
+                asyncio.create_task(process_final_transcript(
+                    str(next_item.get("transcript", "")),
+                    str(next_item.get("utteranceId", "")),
+                    str(next_item.get("reason", "queued")),
+                ))
+            elif buffered_transcript_for_submit():
+                schedule_turn_processing(0.15, "queued")
 
     def normalized_final_transcript() -> str:
         segments = [str(item).strip() for item in state.get("finalSegments", []) if str(item).strip()]
@@ -242,15 +261,21 @@ async def voice_stream(websocket: WebSocket) -> None:
 
     def buffered_transcript_for_display() -> str:
         final_text = normalized_final_transcript()
+        partial_text = str(state.get("latestPartial", "")).strip()
+        if final_text and partial_text and (partial_text.startswith(final_text) or len(partial_text) > len(final_text) + 2):
+            return partial_text
         if final_text:
             return final_text
-        return str(state.get("latestPartial", "")).strip()
+        return partial_text
 
     def buffered_transcript_for_submit() -> str:
         final_text = normalized_final_transcript()
+        partial_text = str(state.get("latestPartial", "")).strip()
+        if final_text and partial_text and (partial_text.startswith(final_text) or len(partial_text) > len(final_text) + 2):
+            return partial_text
         if final_text:
             return final_text
-        return str(state.get("latestPartial", "")).strip()
+        return partial_text
 
     def next_display_seq() -> int:
         state["displaySeq"] = int(state.get("displaySeq") or 0) + 1
@@ -271,7 +296,9 @@ async def voice_stream(websocket: WebSocket) -> None:
             state["finalSegments"] = [segment]
         elif not joined or (segment not in joined and (not segments or segment != segments[-1])):
             state["finalSegments"] = [*segments, segment]
-        state["latestPartial"] = ""
+        latest_partial = str(state.get("latestPartial", "")).strip()
+        if not latest_partial or len(segment) >= len(latest_partial):
+            state["latestPartial"] = ""
 
     async def process_buffered_utterance(reason: str = "final") -> bool:
         transcript = buffered_transcript_for_submit()
@@ -336,12 +363,24 @@ async def voice_stream(websocket: WebSocket) -> None:
             event = await event_queue.get()
             event_type = event.get("type")
             if event_type == "asr_partial":
-                if normalized_final_transcript():
+                partial_text = str(event.get("transcript", "")).strip()
+                final_text = normalized_final_transcript()
+                if final_text:
+                    if partial_text and (partial_text.startswith(final_text) or len(partial_text) > len(final_text) + 2):
+                        state["latestPartial"] = partial_text
+                        utterance_id = str(state.get("activeUtteranceId") or next_utterance_id())
+                        await websocket.send_json({
+                            "type": "asr_partial",
+                            "transcript": buffered_transcript_for_display(),
+                            "utteranceSeq": next_display_seq(),
+                            "utteranceId": utterance_id,
+                        })
+                        schedule_turn_processing(0.55, "silence")
                     continue
                 cancel_turn_task()
                 is_new_utterance = not state.get("activeUtteranceId")
                 utterance_id = str(state.get("activeUtteranceId") or next_utterance_id())
-                state["latestPartial"] = str(event.get("transcript", "")).strip()
+                state["latestPartial"] = partial_text
                 if is_new_utterance:
                     await websocket.send_json({"type": "speech_started", "utteranceId": utterance_id})
                 await websocket.send_json({
@@ -351,7 +390,7 @@ async def voice_stream(websocket: WebSocket) -> None:
                     "utteranceId": utterance_id,
                 })
                 if len(state["latestPartial"]) >= 2:
-                    schedule_turn_processing(0.95, "silence")
+                    schedule_turn_processing(0.68, "silence")
             elif event_type == "asr_final":
                 utterance_id = str(state.get("activeUtteranceId") or next_utterance_id())
                 append_final_segment(str(event.get("transcript", "")))
@@ -361,7 +400,7 @@ async def voice_stream(websocket: WebSocket) -> None:
                     "utteranceSeq": next_display_seq(),
                     "utteranceId": utterance_id,
                 })
-                schedule_turn_processing(1.15, "final")
+                schedule_turn_processing(0.35, "final")
             elif event_type == "error":
                 await websocket.send_json(event)
                 await restart_speech_stream_once("error")
@@ -400,6 +439,7 @@ async def voice_stream(websocket: WebSocket) -> None:
                 state["sampleRate"] = sample_rate
                 state["streamRestartCount"] = 0
                 state["ignoreNextStreamEnded"] = False
+                state["queuedUtterances"] = []
                 if speech_session:
                     speech_session.stop()
                 try:
