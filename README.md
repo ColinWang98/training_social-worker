@@ -274,6 +274,8 @@ The included `fly.toml` uses:
 
 The first start copies bundled `data/` into the mounted `/data` volume, then uses `/data` as the writable runtime store. API keys and Google service-account JSON must be provided through Fly secrets, not committed files.
 
+The Fly runtime is cloud-first: the deployed machine runs both the Node web server and the Python ADK sidecar. The browser only captures microphone audio and optionally runs the bundled VAD assets served from `/vad/`; it does not require a local ADK, Rhubarb, corpus, or embedding service.
+
 The Docker image is intentionally large because it includes Python dependencies, corpus files, avatar assets, and the local multilingual embedding model. If embedding is not needed in deployment, set:
 
 ```bash
@@ -320,12 +322,32 @@ If Rhubarb is missing or fails, TTS still works and the avatar falls back to the
 
 Credentials must stay local and must not be committed.
 
+## Cloud Readiness Checks
+
+The production build copies browser VAD assets from `node_modules` into `public/vad/` before Vite builds. These generated assets are ignored by git and are included in the Fly image through `npm run build`.
+
+Non-spending cloud checks:
+
+```bash
+npm run cloud:health:test
+npm run cloud:voice:manual-check
+```
+
+`cloud:health:test` verifies that the Fly site is online and protected by Basic Auth. To also check authenticated `/api/health`, pass credentials only through the environment:
+
+```bash
+CLOUD_HEALTH_BASIC_AUTH='teacher:strong-password' npm run cloud:health:test
+```
+
+The manual voice checklist does not call DeepSeek or Google APIs; it prints the browser smoke steps for Cantonese voice, barge-in, TTS, and avatar behavior.
+
 ## Key Scripts
 
 Run checks:
 
 ```bash
 npm run build
+npm run voice:machine:test
 npm run adk:smoke
 npm run smoke:sessions
 ```

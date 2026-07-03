@@ -189,8 +189,13 @@ export type ClientRealismAssessment = {
   underReactionRisk: boolean;
   avoidanceOveruseRisk?: boolean;
   repeatedResponseRisk?: boolean;
-  progressionStage?: 'initial_contact' | 'presenting_issue' | 'context_disclosure' | 'risk_or_need_exploration' | 'next_step_readiness';
+  semanticRepeatRisk?: boolean;
+  semanticFingerprint?: string;
+  progressionStage?: IssueProgressionStage;
   progressionSignals?: string[];
+  issueStageReason?: string;
+  requiredFollowUpAffordance?: string;
+  progressionPausedReason?: string;
   matchedRealismAnchors: string[];
   repairApplied?: boolean;
   repairReason?: string;
@@ -332,6 +337,22 @@ export type HiddenFact = {
   disclosed: boolean;
 };
 
+export type IssueProgressionStage =
+  | 'initial_contact'
+  | 'presenting_issue'
+  | 'context_disclosure'
+  | 'risk_or_need_exploration'
+  | 'next_step_readiness';
+
+export type IssueProgressionStep = {
+  stage: IssueProgressionStage;
+  allowedDisclosureDepth: 1 | 2 | 3 | 4;
+  surfaceCues: string[];
+  transitionSignals: string[];
+  pauseSignals: string[];
+  nextAffordance: string;
+};
+
 export type CaseProfile = {
   id: string;
   caseType: CaseType;
@@ -355,11 +376,18 @@ export type CaseProfile = {
       safety: number;
       directness: number;
     };
-    speechStyleExamples: string[];
+    speechStyleGuide: {
+      responseLength: string;
+      tone: string[];
+      avoidanceStrategies: string[];
+      disclosureStyle: string[];
+      languageNotes: string[];
+    };
     resistancePatterns: string[];
     changeTalkSignals: string[];
   };
   socialWorkContextModel: SocialWorkContextModel;
+  issueProgressionChain?: IssueProgressionStep[];
   psychologicalState: PsychologicalState;
   avatarBaseline: AvatarBaseline;
   relationships: Relationship[];
@@ -411,11 +439,14 @@ export type ClientResponse = {
     responseStyleConstraints: string[];
     requiredAffectHints: AffectLabel[];
     avatarBehaviorHints: MotionCue[];
-    progressionStage?: 'initial_contact' | 'presenting_issue' | 'context_disclosure' | 'risk_or_need_exploration' | 'next_step_readiness';
+    progressionStage?: IssueProgressionStage;
     progressionPaused?: boolean;
     progressionSignals?: string[];
     minFollowUpAffordance?: string;
     maxDisclosureStep?: 1 | 2 | 3 | 4;
+    issueStageReason?: string;
+    requiredFollowUpAffordance?: string;
+    progressionPausedReason?: string;
   };
   simulationStrategySnapshot?: SimulationStrategySnapshot;
   sessionContinuitySnapshot?: {
@@ -426,6 +457,9 @@ export type ClientResponse = {
     avoidedTopics: string[];
     recurringLanguagePatterns: string[];
     relationshipMemory: string;
+    currentIssueStage?: IssueProgressionStage;
+    recentSemanticFingerprints?: string[];
+    stageTransitionHistory?: string[];
     sessionReflection?: {
       trustState: string;
       clientViewOfStudent: string;

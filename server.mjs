@@ -12,6 +12,7 @@ const adkServiceUrl = (process.env.ADK_SERVICE_URL ?? 'http://127.0.0.1:8765').r
 const isProduction = process.env.NODE_ENV === 'production';
 const distDir = resolve('dist');
 const authConfig = loadAuthConfig();
+const startedAt = Date.now();
 
 const vite = isProduction
   ? null
@@ -32,7 +33,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.url === '/api/health') {
-      return proxyRequest(req, res, '/health');
+      return handleHealth(req, res);
     }
 
     if (req.url?.startsWith('/api/')) {
@@ -169,6 +170,8 @@ function mimeType(filePath) {
     '.vrm': 'model/gltf-binary',
     '.glb': 'model/gltf-binary',
     '.vrma': 'application/octet-stream',
+    '.wasm': 'application/wasm',
+    '.onnx': 'application/octet-stream',
   }[extension] ?? 'application/octet-stream';
 }
 
@@ -201,6 +204,61 @@ async function proxyRequest(req, res, targetPath) {
       detail: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+async function handleHealth(req, res) {
+  try {
+    const response = await fetch(`${adkServiceUrl}/health`);
+    const adkHealth = await response.json().catch(() => ({
+      ok: false,
+      error: `ADK health returned non-JSON status ${response.status}`,
+    }));
+    const payload = {
+      ok: response.ok && adkHealth?.ok !== false,
+      node: nodeReadiness(),
+      adk: adkHealth,
+    };
+    res.writeHead(response.ok ? 200 : 503, withAuthCookie(req, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    }));
+    res.end(JSON.stringify(payload));
+  } catch (error) {
+    res.writeHead(503, withAuthCookie(req, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    }));
+    res.end(JSON.stringify({
+      ok: false,
+      node: nodeReadiness(),
+      adk: {
+        ok: false,
+        adkServiceUrl,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    }));
+  }
+}
+
+function nodeReadiness() {
+  return {
+    ok: true,
+    host,
+    port,
+    uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+    nodeEnv: process.env.NODE_ENV ?? 'development',
+    authEnabled: authConfig.enabled,
+    authUsersConfigured: authConfig.users.length,
+    secureCookie: authConfig.secureCookie,
+    adkServiceUrl,
+    voiceWebSocketProxy: '/api/voice-stream',
+    vadAssetsServedFrom: '/vad/',
+    cloudRuntime: {
+      flyAppName: process.env.FLY_APP_NAME ?? null,
+      flyRegion: process.env.FLY_REGION ?? null,
+      flyMachineId: process.env.FLY_MACHINE_ID ?? null,
+    },
+  };
 }
 
 function proxyWebSocketUpgrade(req, socket, head) {

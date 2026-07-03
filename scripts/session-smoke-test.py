@@ -206,6 +206,19 @@ def validate_turn(case_type: str, index: int, student_text: str, response: dict)
         raise RuntimeError(f"{case_type} round {index}: avatar intensity must be numeric")
     if response.get("sessionContinuitySnapshot") is None:
         raise RuntimeError(f"{case_type} round {index}: sessionContinuitySnapshot is required")
+    continuity = response.get("sessionContinuitySnapshot") or {}
+    if continuity.get("currentIssueStage") not in {
+        "initial_contact",
+        "presenting_issue",
+        "context_disclosure",
+        "risk_or_need_exploration",
+        "next_step_readiness",
+    }:
+        raise RuntimeError(f"{case_type} round {index}: sessionContinuitySnapshot.currentIssueStage is required")
+    if "recentSemanticFingerprints" not in continuity:
+        raise RuntimeError(f"{case_type} round {index}: sessionContinuitySnapshot.recentSemanticFingerprints is required")
+    if "stageTransitionHistory" not in continuity:
+        raise RuntimeError(f"{case_type} round {index}: sessionContinuitySnapshot.stageTransitionHistory is required")
     if response.get("simulationMethod") is None:
         raise RuntimeError(f"{case_type} round {index}: simulationMethod is required")
     if response.get("simulationStrategySnapshot") is None:
@@ -219,6 +232,10 @@ def validate_turn(case_type: str, index: int, student_text: str, response: dict)
         "next_step_readiness",
     }:
         raise RuntimeError(f"{case_type} round {index}: adaptivePolicySnapshot.progressionStage is required")
+    if not adaptive_policy.get("issueStageReason"):
+        raise RuntimeError(f"{case_type} round {index}: adaptivePolicySnapshot.issueStageReason is required")
+    if not adaptive_policy.get("requiredFollowUpAffordance"):
+        raise RuntimeError(f"{case_type} round {index}: adaptivePolicySnapshot.requiredFollowUpAffordance is required")
     realism = response.get("realismAssessment") or {}
     for key in ["progressionFitScore", "followUpAffordanceScore"]:
         if not isinstance(realism.get(key), (int, float)):

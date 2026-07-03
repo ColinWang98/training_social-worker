@@ -425,7 +425,10 @@ export function CasePanel({
                   <DirectiveItem label="推進階段" value={adaptivePolicySnapshot.progressionStage ?? 'n/a'} />
                   <DirectiveItem label="推進暫停" value={adaptivePolicySnapshot.progressionPaused ? 'yes' : 'no'} />
                   <DirectiveItem label="可追問要求" value={adaptivePolicySnapshot.minFollowUpAffordance ?? 'n/a'} />
+                  <DirectiveItem label="本輪追問方向" value={adaptivePolicySnapshot.requiredFollowUpAffordance ?? 'n/a'} />
+                  <DirectiveItem label="暫停原因" value={adaptivePolicySnapshot.progressionPausedReason || 'n/a'} />
                 </div>
+                <p className="mutedText">{adaptivePolicySnapshot.issueStageReason ?? '未有 stage reason。'}</p>
                 <TagRow label="回應約束" values={adaptivePolicySnapshot.responseStyleConstraints} />
                 <TagRow label="推進訊號" values={adaptivePolicySnapshot.progressionSignals ?? []} />
                 <TagRow label="情緒提示" values={adaptivePolicySnapshot.requiredAffectHints} />
@@ -439,11 +442,14 @@ export function CasePanel({
                 <div className="avatarDirectiveGrid">
                   <DirectiveItem label="關係記憶" value={sessionContinuitySnapshot.relationshipMemory} />
                   <DirectiveItem label="信任軌跡" value={sessionContinuitySnapshot.trustTrajectory.join(' → ')} />
+                  <DirectiveItem label="當前 issue stage" value={sessionContinuitySnapshot.currentIssueStage ?? 'n/a'} />
                 </div>
                 <TagRow label="關係破裂" values={sessionContinuitySnapshot.ruptureEvents} />
                 <TagRow label="修復嘗試" values={sessionContinuitySnapshot.repairAttempts} />
                 <TagRow label="迴避話題" values={sessionContinuitySnapshot.avoidedTopics} />
                 <TagRow label="語言模式" values={sessionContinuitySnapshot.recurringLanguagePatterns} />
+                <TagRow label="近期語義指紋" values={sessionContinuitySnapshot.recentSemanticFingerprints ?? []} />
+                <TagRow label="Stage transition" values={sessionContinuitySnapshot.stageTransitionHistory ?? []} />
                 {sessionContinuitySnapshot.sessionReflection && (
                   <p className="mutedText">
                     {sessionContinuitySnapshot.sessionReflection.trustState}：
@@ -491,10 +497,14 @@ export function CasePanel({
                   <DirectiveItem label="TTS ready" value={msValue(voiceTimingDebug.ttsReadyMs)} />
                   <DirectiveItem label="Audio play" value={msValue(voiceTimingDebug.audioPlayStartMs)} />
                   <DirectiveItem label="Server elapsed" value={msValue(voiceTimingDebug.lastServerElapsedMs)} />
+                  <DirectiveItem label="State" value={voiceTimingDebug.voiceState} />
+                  <DirectiveItem label="VAD" value={voiceTimingDebug.vadStatus} />
+                  <DirectiveItem label="VAD event" value={voiceTimingDebug.vadLastEvent ?? 'n/a'} />
                   <DirectiveItem label="Commit reason" value={voiceTimingDebug.lastCommitReason ?? 'n/a'} />
                   <DirectiveItem label="Restarts" value={`${voiceTimingDebug.streamRestartCount}`} />
                   <DirectiveItem label="Barge-in" value={`${voiceTimingDebug.bargeInCount}`} />
                   <DirectiveItem label="Transcript chars" value={`${voiceTimingDebug.lastTranscriptLength}`} />
+                  <DirectiveItem label="State log" value={voiceTimingDebug.stateTransitionLog.slice(-4).join(' → ') || 'n/a'} />
                 </div>
               </div>
             )}
@@ -572,7 +582,12 @@ export function CasePanel({
                   <DirectiveItem label="推進適配" value={typeof realismAssessment.progressionFitScore === 'number' ? `${realismAssessment.progressionFitScore.toFixed(1)}/10` : 'n/a'} />
                   <DirectiveItem label="可追問性" value={typeof realismAssessment.followUpAffordanceScore === 'number' ? `${realismAssessment.followUpAffordanceScore.toFixed(1)}/10` : 'n/a'} />
                   <DirectiveItem label="過度迴避" value={realismAssessment.avoidanceOveruseRisk ? 'yes' : 'no'} />
+                  <DirectiveItem label="語義重複" value={realismAssessment.semanticRepeatRisk ? `yes (${realismAssessment.semanticFingerprint ?? 'n/a'})` : 'no'} />
+                  <DirectiveItem label="評估 stage" value={realismAssessment.progressionStage ?? 'n/a'} />
                 </div>
+                {realismAssessment.requiredFollowUpAffordance && (
+                  <p className="mutedText">{realismAssessment.requiredFollowUpAffordance}</p>
+                )}
                 {realismAssessment.repairApplied && (
                   <p className="overrideNote">已校準：{realismAssessment.repairReason ?? '回應真實度不足'}</p>
                 )}

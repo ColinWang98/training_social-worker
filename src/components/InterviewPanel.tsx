@@ -2,17 +2,7 @@ import { FormEvent } from 'react';
 import { Mic, MicOff, Send, ShieldAlert, Square } from 'lucide-react';
 import { ClientResponse, InterviewTurn, ResponseLanguage } from '../lib/interviewTypes';
 import { t } from '../lib/i18n';
-
-type VoiceStatus =
-  | 'idle'
-  | 'connecting'
-  | 'listening'
-  | 'user_speaking'
-  | 'committing'
-  | 'generating'
-  | 'avatar_speaking'
-  | 'interrupted'
-  | 'error';
+import { VoiceStatus } from '../lib/voiceSessionMachine';
 
 type InterviewPanelProps = {
   turns: InterviewTurn[];
@@ -159,6 +149,7 @@ function voiceStatusLabel(status: VoiceStatus, language: ResponseLanguage) {
       generating: '生成回覆中',
       avatar_speaking: '服務對象說話中，可直接打斷',
       interrupted: '已打斷，正在聆聽',
+      recovering: '語音服務恢復中',
       error: '語音服務錯誤',
     },
     english: {
@@ -170,6 +161,7 @@ function voiceStatusLabel(status: VoiceStatus, language: ResponseLanguage) {
       generating: 'Generating response',
       avatar_speaking: 'Client speaking; you can interrupt',
       interrupted: 'Interrupted; listening',
+      recovering: 'Recovering voice service',
       error: 'Voice service error',
     },
   };

@@ -649,7 +649,8 @@ button {
 
 .voiceStatus.avatar_speaking,
 .voiceStatus.generating,
-.voiceStatus.committing {
+.voiceStatus.committing,
+.voiceStatus.recovering {
   color: #5d451c;
   background: #f5eedf;
 }

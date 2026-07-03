@@ -63,13 +63,14 @@ def corpus_summary(case_profile: dict) -> dict:
 def synthetic_interview(case_profile: dict) -> list[dict[str, str]]:
     context = case_profile.get("socialWorkContextModel", {})
     persona = case_profile.get("persona", {})
+    speech_style = persona.get("speechStyleGuide", {})
     return [
         {"question": "你會點樣形容而家最大壓力？", "answer": context.get("selfNarrative", "")},
         {"question": "屋企、學校或工作入面，邊啲關係最影響你？", "answer": "；".join(context.get("relationshipExpectations", []))},
         {"question": "你最怕別人點樣睇你？", "answer": "；".join(context.get("shameTriggers", []))},
         {"question": "你通常點避開難講嘅事？", "answer": "；".join(context.get("avoidancePatterns", []))},
         {"question": "你希望求助係點樣先會安全？", "answer": "；".join(context.get("helpSeekingBeliefs", []))},
-        {"question": "你平時講嘢大概係咩風格？", "answer": "；".join(persona.get("speechStyleExamples", []))},
+        {"question": "你平時講嘢大概係咩風格？", "answer": summarize_speech_style_guide(speech_style)},
     ]
 
 
@@ -104,7 +105,7 @@ def build_profile(case_profile: dict, use_synthetic: bool) -> dict:
             "helpSeekingBeliefs": context.get("helpSeekingBeliefs", []),
         },
         "avoidancePatterns": context.get("avoidancePatterns", []),
-        "speechStyle": "；".join(persona.get("speechStyleExamples", [])),
+        "speechStyle": summarize_speech_style_guide(persona.get("speechStyleGuide", {})),
         "caseReflections": {
             "pie": [context.get("selfNarrative", ""), "從家庭、學校/工作、朋輩和服務系統脈絡理解服務對象。"],
             "riskProtective": [
@@ -113,7 +114,7 @@ def build_profile(case_profile: dict, use_synthetic: bool) -> dict:
             ],
             "traumaInformed": context.get("disclosureRules", []),
             "motivationalInterviewing": persona.get("changeTalkSignals", []),
-            "languageStyle": persona.get("speechStyleExamples", []),
+            "languageStyle": speech_style_lines(persona.get("speechStyleGuide", {})),
         },
         "personInEnvironment": {
             "person": {
@@ -184,6 +185,23 @@ def build_profile(case_profile: dict, use_synthetic: bool) -> dict:
         "adaptationLog": [],
         "sourceEvidenceSummary": summary,
     }
+
+
+def speech_style_lines(speech_style: dict) -> list[str]:
+    if not isinstance(speech_style, dict):
+        return []
+    lines = []
+    if speech_style.get("responseLength"):
+        lines.append(f"responseLength={speech_style.get('responseLength')}")
+    for key in ["tone", "avoidanceStrategies", "disclosureStyle", "languageNotes"]:
+        values = speech_style.get(key)
+        if isinstance(values, list) and values:
+            lines.append(f"{key}: " + "；".join(str(item) for item in values))
+    return lines
+
+
+def summarize_speech_style_guide(speech_style: dict) -> str:
+    return "；".join(speech_style_lines(speech_style))
 
 
 def unique_preserve_order(values: list) -> list:
