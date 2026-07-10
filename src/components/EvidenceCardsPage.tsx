@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Search } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Search } from 'lucide-react';
 import { EvidenceCard, ResponseLanguage } from '../lib/interviewTypes';
 import { EvidenceCardListRequest, listEvidenceCards } from '../lib/apiClient';
 
-const pageSize = 50;
+const pageSize = 40;
 
 const sourceOptions = [
   'annomi',
@@ -32,7 +32,7 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
   const [backend, setBackend] = useState('loading');
   const [offset, setOffset] = useState(0);
   const [source, setSource] = useState('');
-  const [quality, setQuality] = useState('');
+  const [quality, setQuality] = useState('approved');
   const [clientGroup, setClientGroup] = useState('');
   const [affect, setAffect] = useState('');
   const [searchDraft, setSearchDraft] = useState('');
@@ -41,6 +41,8 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
   const [appliedTag, setAppliedTag] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [privateReview, setPrivateReview] = useState(false);
 
   const request = useMemo<EvidenceCardListRequest>(
     () => ({
@@ -66,6 +68,7 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
         setCards(response.cards);
         setTotal(response.total);
         setBackend(response.backend);
+        setSelectedCardId((current) => response.cards.some((card) => card.id === current) ? current : response.cards[0]?.id ?? null);
       })
       .catch((error: Error) => {
         if (ignore) return;
@@ -96,7 +99,7 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
   const resetFilters = () => {
     setOffset(0);
     setSource('');
-    setQuality('');
+    setQuality('approved');
     setClientGroup('');
     setAffect('');
     setSearchDraft('');
@@ -104,6 +107,7 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
     setAppliedSearch('');
     setAppliedTag('');
   };
+  const selectedCard = cards.find((card) => card.id === selectedCardId) ?? null;
 
   return (
     <main className="evidencePage">
@@ -173,6 +177,10 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
       <section className="evidenceToolbar" aria-label="Evidence card pagination">
         <span>{isLoading ? (uiLanguage === 'english' ? 'Loading...' : '載入中...') : uiLanguage === 'english' ? `Showing ${pageStart}-${pageEnd} / ${total.toLocaleString()}` : `顯示 ${pageStart}-${pageEnd} / ${total.toLocaleString()}`}</span>
         <div>
+          <button className={privateReview ? 'privateReviewActive' : ''} type="button" onClick={() => setPrivateReview((current) => !current)}>
+            {privateReview ? <Eye size={14} /> : <EyeOff size={14} />}
+            {uiLanguage === 'english' ? 'Private raw review' : '私有原文审阅'}
+          </button>
           <button type="button" disabled={!canGoBack || isLoading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>{uiLanguage === 'english' ? 'Previous' : '上一頁'}</button>
           <button type="button" disabled={!canGoForward || isLoading} onClick={() => setOffset(offset + pageSize)}>{uiLanguage === 'english' ? 'Next' : '下一頁'}</button>
         </div>
@@ -180,17 +188,31 @@ export function EvidenceCardsPage({ onBack, uiLanguage }: EvidenceCardsPageProps
 
       {errorMessage ? <div className="evidenceError">{errorMessage}</div> : null}
 
-      <section className="evidenceCardList" aria-label="Evidence cards">
-        {cards.map((card) => <EvidenceCardItem card={card} key={card.id} uiLanguage={uiLanguage} />)}
-        {!isLoading && cards.length === 0 && !errorMessage ? <div className="emptyEvidenceState">{uiLanguage === 'english' ? 'No evidence cards match the filters.' : '沒有符合條件的 evidence cards。'}</div> : null}
+      <section className="evidenceBrowserWorkspace">
+        <div className="evidenceTableWrap" aria-label="Evidence cards">
+          <div className="evidenceTableHeader">
+            <span>ID / Source</span><span>Group</span><span>Affect</span><span>Depth</span><span>Quality</span>
+          </div>
+          <div className="evidenceTableBody">
+            {cards.map((card) => (
+              <button className={`evidenceTableRow ${selectedCardId === card.id ? 'selected' : ''}`} key={card.id} type="button" onClick={() => setSelectedCardId(card.id)}>
+                <span><strong>{card.id}</strong><small>{card.source}</small></span>
+                <span>{card.clientGroup}</span><span>{card.affect}</span><span>{card.disclosureDepth}</span><span>{card.quality}</span>
+              </button>
+            ))}
+            {!isLoading && cards.length === 0 && !errorMessage ? <div className="emptyEvidenceState">{uiLanguage === 'english' ? 'No evidence cards match the filters.' : '沒有符合條件的 evidence cards。'}</div> : null}
+          </div>
+        </div>
+        <EvidenceInspector card={selectedCard} privateReview={privateReview} uiLanguage={uiLanguage} />
       </section>
     </main>
   );
 }
 
-function EvidenceCardItem({ card, uiLanguage }: { card: EvidenceCard; uiLanguage: ResponseLanguage }) {
+function EvidenceInspector({ card, privateReview, uiLanguage }: { card: EvidenceCard | null; privateReview: boolean; uiLanguage: ResponseLanguage }) {
+  if (!card) return <aside className="evidenceInspector"><p>{uiLanguage === 'english' ? 'Select a card to inspect it.' : '请选择一张 Evidence Card。'}</p></aside>;
   return (
-    <article className="evidenceCardItem">
+    <aside className="evidenceInspector">
       <header>
         <div>
           <strong>{card.id}</strong>
@@ -202,18 +224,31 @@ function EvidenceCardItem({ card, uiLanguage }: { card: EvidenceCard; uiLanguage
           <span>depth {card.disclosureDepth}</span>
         </div>
       </header>
-      <p className="evidenceUtterance">{card.clientUtterance}</p>
-      {card.workerMove ? <p className="evidenceWorkerMove">{uiLanguage === 'english' ? 'Worker move' : '社工話術'}: {card.workerMove}</p> : null}
+      <div className="reactionPatternBox">
+        <span>{uiLanguage === 'english' ? 'Abstract reaction pattern' : '抽象反应模式'}</span>
+        <strong>{reactionPattern(card)}</strong>
+      </div>
       <TagLine label={uiLanguage === 'english' ? 'Issue tags' : '議題標籤'} values={card.issueTags} />
       <TagLine label={uiLanguage === 'english' ? 'Risk signals' : '風險標籤'} values={card.riskSignals} />
       <TagLine label="Change talk" values={card.changeTalk ?? []} />
       <TagLine label="Review flags" values={card.reviewFlags ?? []} />
+      {privateReview ? <div className="privateRawText">
+        <p className="evidenceUtterance">{card.clientUtterance}</p>
+        {card.workerMove ? <p className="evidenceWorkerMove">{uiLanguage === 'english' ? 'Worker move' : '社工話術'}: {card.workerMove}</p> : null}
+      </div> : <p className="privateReviewNotice">{uiLanguage === 'english' ? 'Raw utterance is hidden. Enable private raw review to inspect it.' : '原始语句已隐藏；只有明确开启私有原文审阅后才会显示。'}</p>}
       <footer>
         <span>{card.licenseNote}</span>
         {card.provenanceNote ? <span>{card.provenanceNote}</span> : null}
       </footer>
-    </article>
+    </aside>
   );
+}
+
+function reactionPattern(card: EvidenceCard) {
+  if (card.riskSignals.length) return 'risk_cue_low_detail';
+  if (card.changeTalk?.length) return 'ambivalence_or_change_talk';
+  if (card.resistanceType) return `${card.resistanceType}_response_pattern`;
+  return `${card.affect || 'neutral'}_service_user_response`;
 }
 
 function TagLine({ label, values }: { label: string; values: string[] }) {

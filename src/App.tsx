@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, CheckCircle2, Mic, ShieldCheck, UserRoundCog } from 'lucide-react';
 import { createActor } from 'xstate';
-import { CasePanel } from './components/CasePanel';
-import { EvidenceCardsPage } from './components/EvidenceCardsPage';
+import { PostSessionReportDialog } from './components/CasePanel';
 import { InterviewPanel } from './components/InterviewPanel';
-import { VrmStage } from './components/VrmStage';
-import { requestClientResponse, requestFinalReview, requestTtsAudio, startSession, TtsResponse } from './lib/apiClient';
+import { TraineeContextDrawer } from './components/TraineeContextDrawer';
+import { AuthSession, requestAuthSession, requestClientResponse, requestFinalReview, requestTtsAudio, startSession, TtsResponse } from './lib/apiClient';
 import { affectPresets, avatarAssets, DEFAULT_AVATAR_ID, ExpressionWeights } from './lib/avatarConfig';
 import { estimateCantoneseSpeechDuration } from './lib/arkitExpressions';
-import { BrowserVadController, BrowserVadStatus, startBrowserVad } from './lib/browserVad';
+import type { BrowserVadController, BrowserVadStatus } from './lib/browserVad';
 import { applyClientResponse, createTurn } from './lib/caseEngine';
 import { caseProfiles, johnDoCase } from './lib/caseProfile';
-import { t } from './lib/i18n';
+import { caseDisplay, observableLabel, t } from './lib/i18n';
 import {
   AffectLabel,
   CaseProfile,
@@ -24,6 +24,12 @@ import {
   SimulationMethod,
 } from './lib/interviewTypes';
 import { VoiceSessionEvent, VoiceStatus, voiceSessionMachine, voiceStatusFromSnapshot } from './lib/voiceSessionMachine';
+
+const VrmStage = lazy(() => import('./components/VrmStage').then((module) => ({ default: module.VrmStage })));
+const EvidenceCardsPage = lazy(() => import('./components/EvidenceCardsPage').then((module) => ({ default: module.EvidenceCardsPage })));
+const InstructorConsole = lazy(() => import('./components/InstructorConsole').then((module) => ({ default: module.InstructorConsole })));
+
+type AppRoute = 'training' | 'instructor' | 'evidence';
 
 const defaultWeights: ExpressionWeights = {
   neutral: 0.12,
@@ -115,7 +121,11 @@ const emptyVoiceTiming: VoiceTimingDebug = {
 };
 
 export default function App() {
-  const [activePage, setActivePage] = useState(() => (window.location.hash === '#evidence-cards' ? 'evidence-cards' : 'training'));
+  const [activeRoute, setActiveRoute] = useState<AppRoute>(() => routeFromLocation());
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isContextDrawerOpen, setIsContextDrawerOpen] = useState(false);
+  const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
   const [caseProfile, setCaseProfile] = useState<CaseProfile>(johnDoCase);
   const [turns, setTurns] = useState<InterviewTurn[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -143,7 +153,6 @@ export default function App() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voiceTiming, setVoiceTiming] = useState<VoiceTimingDebug>(emptyVoiceTiming);
   const [speechLevel, setSpeechLevel] = useState(0);
-  const [isShutdownPending, setIsShutdownPending] = useState(false);
   const [visemePlayback, setVisemePlayback] = useState({
     text: '',
     startedAtMs: 0,
@@ -163,7 +172,7 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micContextRef = useRef<AudioContext | null>(null);
-  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const micProcessorRef = useRef<AudioNode | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const browserVadRef = useRef<BrowserVadController | null>(null);
   const suppressAutoTtsRef = useRef(false);
@@ -181,11 +190,20 @@ export default function App() {
   );
 
   useEffect(() => {
-    const handleHashChange = () => {
-      setActivePage(window.location.hash === '#evidence-cards' ? 'evidence-cards' : 'training');
-    };
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    const handlePopState = () => setActiveRoute(routeFromLocation());
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    requestAuthSession()
+      .then(setAuthSession)
+      .catch((error: Error) => setAuthError(error.message));
+  }, []);
+
+  const navigate = useCallback((path: string) => {
+    window.history.pushState({}, '', path);
+    setActiveRoute(routeFromLocation());
   }, []);
 
   const expressionWeights = useMemo<ExpressionWeights>(
@@ -499,6 +517,7 @@ export default function App() {
     const clientTurn: InterviewTurn = {
       ...createTurn('client', clientResponse.clientText),
       revealedFacts: clientResponse.revealedFacts,
+      disclosureLedger: clientResponse.disclosureLedger,
     };
     const nextCase = applyClientResponse(currentCase, clientResponse);
     const nextHistory = [...historyWithStudent, clientTurn];
@@ -570,27 +589,6 @@ export default function App() {
     sendVoiceStateEvent('STOP');
   }, [clearVoiceCommitTimer, sendVoiceStateEvent, setVadStatus]);
 
-  const shutdownServices = useCallback(async () => {
-    if (isShutdownPending) return;
-    setIsShutdownPending(true);
-    setErrorMessage(null);
-    stopPlayback();
-    stopVoiceCapture();
-    setStatusMessage(responseLanguage === 'english' ? 'Stopping local services...' : '正在停止本地服務...');
-    try {
-      const response = await fetch('/api/shutdown', { method: 'POST' });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || `HTTP ${response.status}`);
-      }
-      setStatusMessage(responseLanguage === 'english' ? 'Local services are stopping.' : '本地服務正在停止。');
-    } catch (error) {
-      setIsShutdownPending(false);
-      setStatusMessage(responseLanguage === 'english' ? 'Failed to stop services.' : '停止服務失敗。');
-      setErrorMessage(error instanceof Error ? error.message : responseLanguage === 'english' ? 'Failed to stop services.' : '停止服務失敗。');
-    }
-  }, [isShutdownPending, responseLanguage, stopPlayback, stopVoiceCapture]);
-
   useEffect(() => {
     return () => {
       stopVoiceCapture();
@@ -630,11 +628,9 @@ export default function App() {
       const context = new AudioContextCtor();
       micContextRef.current = context;
       const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(4096, 1, 1);
       micSourceRef.current = source;
-      micProcessorRef.current = processor;
 
-      void startBrowserVad({
+      void import('./lib/browserVad').then(({ startBrowserVad }) => startBrowserVad({
         stream,
         audioContext: context,
         onSpeechStart: () => {
@@ -660,7 +656,7 @@ export default function App() {
           scheduleVoiceCommit('vad_speech_end', responseLanguage === 'cantonese' ? 260 : 340);
         },
         onStatus: setVadStatus,
-      }).then((controller) => {
+      })).then((controller) => {
         if (!controller) return;
         if (micStreamRef.current !== stream) {
           void controller.stop();
@@ -860,15 +856,27 @@ export default function App() {
         sendVoiceStateEvent('STOP');
       };
 
-      processor.onaudioprocess = (event) => {
-        if (socket.readyState !== WebSocket.OPEN) return;
-        const input = event.inputBuffer.getChannelData(0);
-        const downsampled = downsampleTo16Khz(input, context.sampleRate);
-        socket.send(JSON.stringify({
-          type: 'audio',
-          audioBase64: pcm16ToBase64(downsampled),
-        }));
-      };
+      let processor: AudioNode;
+      try {
+        await context.audioWorklet.addModule('/audio/pcm-capture-worklet.js');
+        const worklet = new AudioWorkletNode(context, 'pcm-capture-processor');
+        worklet.port.onmessage = (event: MessageEvent<Float32Array>) => {
+          if (socket.readyState !== WebSocket.OPEN) return;
+          const downsampled = downsampleTo16Khz(event.data, context.sampleRate);
+          socket.send(downsampled.buffer);
+        };
+        processor = worklet;
+      } catch {
+        const scriptProcessor = context.createScriptProcessor(4096, 1, 1);
+        scriptProcessor.onaudioprocess = (event) => {
+          if (socket.readyState !== WebSocket.OPEN) return;
+          const input = event.inputBuffer.getChannelData(0);
+          const downsampled = downsampleTo16Khz(input, context.sampleRate);
+          socket.send(JSON.stringify({ type: 'audio', audioBase64: pcm16ToBase64(downsampled) }));
+        };
+        processor = scriptProcessor;
+      }
+      micProcessorRef.current = processor;
       source.connect(processor);
       const mutedOutput = context.createGain();
       mutedOutput.gain.value = 0;
@@ -897,6 +905,8 @@ export default function App() {
     setErrorMessage(null);
     setLatestClientResponse(null);
     setPostSessionReport(null);
+    setIsReportDialogOpen(false);
+    setIsContextDrawerOpen(false);
     setIsFinalReviewPending(false);
     setSessionEnded(false);
     setMotionCue('neutral');
@@ -954,6 +964,7 @@ export default function App() {
         responseLanguage,
       });
       setPostSessionReport(report);
+      setIsReportDialogOpen(true);
       setSessionEnded(true);
       stopVoiceCapture();
       stopPlayback();
@@ -970,171 +981,141 @@ export default function App() {
     }
   }, [caseProfile, isFinalReviewPending, isPending, responseLanguage, sessionId, stopPlayback, stopVoiceCapture, turns]);
 
-  if (activePage === 'evidence-cards') {
-    return (
-      <EvidenceCardsPage
-        onBack={() => {
-          window.location.hash = '';
-          setActivePage('training');
-        }}
-        uiLanguage={responseLanguage}
-      />
-    );
+  const canEndSession = turns.some((turn) => turn.speaker === 'student') && !sessionEnded;
+  const instructorProps = {
+    caseProfile,
+    caseProfiles,
+    evidenceSummary: latestClientResponse?.evidenceSummary ?? null,
+    avatarDirective: latestClientResponse?.avatarDirective ?? null,
+    realismAssessment: latestClientResponse?.realismAssessment ?? null,
+    adaptivePolicySnapshot: latestClientResponse?.adaptivePolicySnapshot ?? null,
+    sessionContinuitySnapshot: latestClientResponse?.sessionContinuitySnapshot ?? null,
+    contextConsistencyAssessment: latestClientResponse?.contextConsistencyAssessment ?? null,
+    profileGroundingSnapshot: latestClientResponse?.profileGroundingSnapshot ?? null,
+    pieContextSnapshot: latestClientResponse?.pieContextSnapshot ?? null,
+    simulationMethod,
+    retrievalOptions,
+    simulationStrategySnapshot: latestClientResponse?.simulationStrategySnapshot ?? null,
+    safetyFlags: latestClientResponse?.safetyFlags ?? [],
+    motionCue,
+    statusMessage,
+    avatarBlendshapeDebug,
+    avatarMotionDebug,
+    voiceTimingDebug: voiceTiming,
+    postSessionReport,
+    isFinalReviewPending,
+    canEndSession,
+    safetyHint: latestClientResponse?.safetyHint ?? null,
+    onCaseChange: handleCaseChange,
+    onEndSession: handleEndSession,
+    onSimulationMethodChange: setSimulationMethod,
+    onRetrievalOptionsChange: setRetrievalOptions,
+    onVrmaFile: setVrmaFile,
+    uiLanguage: responseLanguage,
+  };
+
+  if (authError) return <main className="routeState"><ShieldCheck size={28} /><h1>Authentication unavailable</h1><p>{authError}</p></main>;
+  if (!authSession) return <main className="routeState"><div className="loadingSpinner" /><p>{responseLanguage === 'english' ? 'Loading workspace…' : '正在載入工作區…'}</p></main>;
+  if ((activeRoute === 'instructor' || activeRoute === 'evidence') && authSession.role !== 'instructor') {
+    return <main className="routeState"><ShieldCheck size={28} /><h1>403</h1><p>{responseLanguage === 'english' ? 'Instructor access is required.' : '此頁面只供督導／研究者使用。'}</p><button type="button" onClick={() => navigate('/training')}>{responseLanguage === 'english' ? 'Back to training' : '返回訓練'}</button></main>;
   }
+  if (activeRoute === 'evidence') return <Suspense fallback={<RouteLoading language={responseLanguage} />}><EvidenceCardsPage onBack={() => navigate('/instructor')} uiLanguage={responseLanguage} /></Suspense>;
+  if (activeRoute === 'instructor') return (
+    <Suspense fallback={<RouteLoading language={responseLanguage} />}>
+      <InstructorConsole
+        {...instructorProps}
+        avatarAssetId={avatarAssetId}
+        onAvatarAssetChange={(avatarId) => { stopPlayback(); setAvatarAssetId(avatarId); }}
+        onBackToTraining={() => navigate('/training')}
+        onOpenEvidence={() => navigate('/instructor/evidence')}
+        username={authSession.username}
+      />
+    </Suspense>
+  );
 
   return (
-    <main className="appShell">
-      <section className="avatarColumn" aria-label="Avatar preview">
-        <header className="appHeader">
-          <div>
-            <h1>{t(responseLanguage, 'appTitle')}</h1>
-            <p>{t(responseLanguage, 'appSubtitle')}</p>
-          </div>
-          <div className="headerMeta">
-            <div className="headerControl">
-              <label htmlFor="avatarAsset">{t(responseLanguage, 'avatarLabel')}</label>
-              <select
-                id="avatarAsset"
-                value={selectedAvatar.id}
-                onChange={(event) => {
-                  stopPlayback();
-                  setAvatarAssetId(event.target.value);
-                }}
-              >
-                {avatarAssets.map((asset) => (
-                  <option key={asset.id} value={asset.id}>
-                    {asset.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="headerControl">
-              <span className="headerControlLabel">{t(responseLanguage, 'voiceLabel')}</span>
-              <div className="modeSwitch compactModeSwitch" aria-label={t(responseLanguage, 'voiceLabel')}>
-                <button
-                  type="button"
-                  className={responseLanguage === 'cantonese' ? 'active' : ''}
-                  onClick={() => setResponseLanguage('cantonese')}
-                >
-                  粵語
-                </button>
-                <button
-                  type="button"
-                  className={responseLanguage === 'english' ? 'active' : ''}
-                  onClick={() => setResponseLanguage('english')}
-                >
-                  English
-                </button>
-              </div>
-            </div>
-            <div className="headerActions">
-              <button
-                type="button"
-                className="headerSecondaryButton"
-                onClick={() => {
-                  window.location.hash = 'evidence-cards';
-                  setActivePage('evidence-cards');
-                }}
-              >
-                {t(responseLanguage, 'evidenceCards')}
-              </button>
-              <button
-                type="button"
-                className="shutdownButton"
-                onClick={shutdownServices}
-                disabled={isShutdownPending}
-              >
-                {isShutdownPending ? t(responseLanguage, 'stopping') : t(responseLanguage, 'stopService')}
-              </button>
-            </div>
-          </div>
-        </header>
+    <main className="trainingWorkspace">
+      <header className="trainingToolbar">
+        <div className="trainingBrand"><span>Social Work Avatar Lab</span><strong>{t(responseLanguage, 'appTitle')}</strong></div>
+        <label className="toolbarCaseSelector">
+          <span>{t(responseLanguage, 'issueType')}</span>
+          <select value={caseProfile.id} onChange={(event) => handleCaseChange(event.target.value)}>
+            {caseProfiles.map((profile) => <option key={profile.id} value={profile.id}>{caseDisplay(profile, responseLanguage).issueLabel}</option>)}
+          </select>
+        </label>
+        <div className="toolbarSpacer" />
+        <div className="languageControl" role="group" aria-label={t(responseLanguage, 'voiceLabel')}>
+          <button className={responseLanguage === 'cantonese' ? 'active' : ''} type="button" onClick={() => setResponseLanguage('cantonese')}>粵語</button>
+          <button className={responseLanguage === 'english' ? 'active' : ''} type="button" onClick={() => setResponseLanguage('english')}>English</button>
+        </div>
+        <div className={`toolbarVoiceState ${voiceStatus}`}><Mic size={14} /><span>{desktopVoiceStatusLabel(voiceStatus, responseLanguage)}</span></div>
+        <button className="toolbarAction" type="button" onClick={() => setIsContextDrawerOpen(true)}><BookOpen size={16} />{responseLanguage === 'english' ? 'Case context' : '個案摘要'}</button>
+        <button className="toolbarPrimary" disabled={(!canEndSession && !postSessionReport) || isFinalReviewPending} type="button" onClick={() => postSessionReport ? setIsReportDialogOpen(true) : void handleEndSession()}><CheckCircle2 size={16} />{postSessionReport ? t(responseLanguage, 'viewReport') : isFinalReviewPending ? t(responseLanguage, 'generatingReport') : t(responseLanguage, 'endSession')}</button>
+        {authSession.role === 'instructor' ? <button className="toolbarIconAction" type="button" title={responseLanguage === 'english' ? 'Instructor Console' : '督導控制台'} onClick={() => navigate('/instructor')}><UserRoundCog size={17} /></button> : null}
+        <div className="toolbarAccount"><span>{authSession.username}</span><strong>{authSession.role}</strong></div>
+      </header>
 
-        <VrmStage
-          avatarPath={selectedAvatar.modelPath}
-          avatarFallbackPaths={selectedAvatar.fallbackPaths}
-          avatarLabel={selectedAvatar.displayName}
-          autoBlink={autoBlink}
-          expressionWeights={expressionWeights}
-          motionIntensity={motionIntensity}
-          motionCue={motionCue}
-          expressionProfile={latestClientResponse?.avatarDirective?.affect ?? caseProfile.avatarBaseline.baselineMood}
-          expressionPlan={latestClientResponse?.avatarDirective?.expressionPlan}
-          caseBaselineMood={caseProfile.avatarBaseline.baselineMood}
-          caseRestingCue={caseProfile.avatarBaseline.restingCue}
-          caseGazePattern={caseProfile.avatarBaseline.gazePattern}
-          caseIdleIntensity={caseProfile.avatarBaseline.idleIntensity}
-          baselineMood={latestClientResponse?.avatarDirective?.baselineMood}
-          gesture={latestClientResponse?.avatarDirective?.gesture}
-          transitionMs={latestClientResponse?.avatarDirective?.transitionMs}
-          holdMs={latestClientResponse?.avatarDirective?.holdMs}
-          priority={latestClientResponse?.avatarDirective?.priority}
-          performancePlan={latestClientResponse?.avatarDirective?.performancePlan}
-          reactionKey={reactionKey}
-          speechLevel={speechLevel}
-          visemePlayback={visemePlayback}
-          lipSyncProfile={selectedAvatar.lipSyncProfile}
-          vrmaFile={vrmaFile}
-          onStatusChange={handleStatusChange}
+      <div className="trainingMain">
+        <section className="avatarWorkspace" aria-label="Avatar preview">
+          <div className="avatarIdentity"><div><span>{responseLanguage === 'english' ? 'Service user' : '服務對象'}</span><strong>{caseProfile.client.displayName}</strong></div><span>{observableLabel(responseLanguage, latestClientResponse?.avatarDirective?.affect ?? caseProfile.avatarBaseline.baselineMood)}</span></div>
+          <Suspense fallback={<div className="avatarLoading"><div className="loadingSpinner" /><span>{responseLanguage === 'english' ? 'Loading avatar…' : '正在載入 Avatar…'}</span></div>}>
+            <VrmStage
+              avatarPath={selectedAvatar.modelPath}
+              avatarFallbackPaths={selectedAvatar.fallbackPaths}
+              avatarLabel={selectedAvatar.displayName}
+              autoBlink={autoBlink}
+              expressionWeights={expressionWeights}
+              motionIntensity={motionIntensity}
+              motionCue={motionCue}
+              expressionProfile={latestClientResponse?.avatarDirective?.affect ?? caseProfile.avatarBaseline.baselineMood}
+              expressionPlan={latestClientResponse?.avatarDirective?.expressionPlan}
+              caseBaselineMood={caseProfile.avatarBaseline.baselineMood}
+              caseRestingCue={caseProfile.avatarBaseline.restingCue}
+              caseGazePattern={caseProfile.avatarBaseline.gazePattern}
+              caseIdleIntensity={caseProfile.avatarBaseline.idleIntensity}
+              baselineMood={latestClientResponse?.avatarDirective?.baselineMood}
+              gesture={latestClientResponse?.avatarDirective?.gesture}
+              transitionMs={latestClientResponse?.avatarDirective?.transitionMs}
+              holdMs={latestClientResponse?.avatarDirective?.holdMs}
+              priority={latestClientResponse?.avatarDirective?.priority}
+              performancePlan={latestClientResponse?.avatarDirective?.performancePlan}
+              reactionKey={reactionKey}
+              speechLevel={speechLevel}
+              visemePlayback={visemePlayback}
+              lipSyncProfile={selectedAvatar.lipSyncProfile}
+              vrmaFile={vrmaFile}
+              onStatusChange={handleStatusChange}
+            />
+          </Suspense>
+          <div className="avatarRuntimeState"><span>{selectedAvatar.displayName}</span><span>{statusMessage}</span></div>
+        </section>
+
+        <InterviewPanel
+          errorMessage={errorMessage}
+          inputValue={inputValue}
+          isPending={isPending}
+          sessionEnded={sessionEnded}
+          latestClientResponse={latestClientResponse}
+          partialTranscript={partialTranscript}
+          finalTranscript={finalTranscript}
+          voiceEnabled={voiceEnabled}
+          voiceError={voiceError}
+          voiceStatus={voiceStatus}
+          turns={turns}
+          onInputChange={setInputValue}
+          onStartVoice={startVoiceCapture}
+          onStopUtterance={stopCurrentUtterance}
+          onStopVoice={stopVoiceCapture}
+          onSubmit={handleSubmit}
+          uiLanguage={responseLanguage}
         />
+      </div>
 
-        <footer className="appFooter">
-          <span>{t(responseLanguage, 'model')}：{selectedAvatar.appAssetPath}</span>
-          <span>{t(responseLanguage, 'credit')}：{selectedAvatar.author}；{selectedAvatar.redistribution}</span>
-        </footer>
-      </section>
-
-      <InterviewPanel
-        errorMessage={errorMessage}
-        inputValue={inputValue}
-        isPending={isPending}
-        sessionEnded={sessionEnded}
-        latestClientResponse={latestClientResponse}
-        partialTranscript={partialTranscript}
-        finalTranscript={finalTranscript}
-        voiceEnabled={voiceEnabled}
-        voiceError={voiceError}
-        voiceStatus={voiceStatus}
-        turns={turns}
-        onInputChange={setInputValue}
-        onStartVoice={startVoiceCapture}
-        onStopUtterance={stopCurrentUtterance}
-        onStopVoice={stopVoiceCapture}
-        onSubmit={handleSubmit}
-        uiLanguage={responseLanguage}
-      />
-
-      <CasePanel
-        caseProfile={caseProfile}
-        caseProfiles={caseProfiles}
-        evidenceSummary={latestClientResponse?.evidenceSummary ?? null}
-        avatarDirective={latestClientResponse?.avatarDirective ?? null}
-        realismAssessment={latestClientResponse?.realismAssessment ?? null}
-        adaptivePolicySnapshot={latestClientResponse?.adaptivePolicySnapshot ?? null}
-        sessionContinuitySnapshot={latestClientResponse?.sessionContinuitySnapshot ?? null}
-        contextConsistencyAssessment={latestClientResponse?.contextConsistencyAssessment ?? null}
-        profileGroundingSnapshot={latestClientResponse?.profileGroundingSnapshot ?? null}
-        pieContextSnapshot={latestClientResponse?.pieContextSnapshot ?? null}
-        simulationMethod={simulationMethod}
-        retrievalOptions={retrievalOptions}
-        simulationStrategySnapshot={latestClientResponse?.simulationStrategySnapshot ?? null}
-        safetyFlags={latestClientResponse?.safetyFlags ?? []}
-        motionCue={motionCue}
-        statusMessage={statusMessage}
-        avatarBlendshapeDebug={avatarBlendshapeDebug}
-        avatarMotionDebug={avatarMotionDebug}
-        voiceTimingDebug={voiceTiming}
-        postSessionReport={postSessionReport}
-        isFinalReviewPending={isFinalReviewPending}
-        canEndSession={turns.some((turn) => turn.speaker === 'student') && !sessionEnded}
-        safetyHint={latestClientResponse?.safetyHint ?? null}
-        onCaseChange={handleCaseChange}
-        onEndSession={handleEndSession}
-        onSimulationMethodChange={setSimulationMethod}
-        onRetrievalOptionsChange={setRetrievalOptions}
-        onVrmaFile={setVrmaFile}
-        uiLanguage={responseLanguage}
-      />
+      {isContextDrawerOpen ? <>
+        <button aria-label="Close drawer" className="drawerScrim" type="button" onClick={() => setIsContextDrawerOpen(false)} />
+        <TraineeContextDrawer caseProfile={caseProfile} latestClientResponse={latestClientResponse} onClose={() => setIsContextDrawerOpen(false)} open turns={turns} uiLanguage={responseLanguage} />
+      </> : null}
+      <PostSessionReportDialog detailed={false} onClose={() => setIsReportDialogOpen(false)} open={isReportDialogOpen} report={postSessionReport} uiLanguage={responseLanguage} />
     </main>
   );
 }
@@ -1198,6 +1179,32 @@ function normalizeVoiceText(text: string) {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '')
     .trim();
+}
+
+function routeFromLocation(): AppRoute {
+  if (window.location.pathname.startsWith('/instructor/evidence')) return 'evidence';
+  if (window.location.pathname.startsWith('/instructor')) return 'instructor';
+  return 'training';
+}
+
+function RouteLoading({ language }: { language: ResponseLanguage }) {
+  return <main className="routeState"><div className="loadingSpinner" /><p>{language === 'english' ? 'Loading workspace…' : '正在載入工作區…'}</p></main>;
+}
+
+function desktopVoiceStatusLabel(status: VoiceStatus, language: ResponseLanguage) {
+  if (language === 'english') {
+    if (status === 'idle') return 'Voice off';
+    if (status === 'avatar_speaking') return 'Client speaking';
+    if (status === 'user_speaking') return 'Listening';
+    if (status === 'generating' || status === 'committing') return 'Processing';
+    return status.replace(/_/g, ' ');
+  }
+  if (status === 'idle') return '語音未啟用';
+  if (status === 'avatar_speaking') return '服務對象說話中';
+  if (status === 'user_speaking' || status === 'listening') return '正在聆聽';
+  if (status === 'generating' || status === 'committing') return '正在處理';
+  if (status === 'error') return '語音錯誤';
+  return '語音連接中';
 }
 
 function floatToPcm16(input: Float32Array) {

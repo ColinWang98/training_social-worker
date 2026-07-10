@@ -10,7 +10,10 @@ sys.path.insert(0, str(ROOT))
 from adk_service.runtime import (
     StudentMoveAnalyzerAgent,
     build_session_continuity,
+    build_disclosure_ledger,
+    client_disclosed_risk_signals,
     progression_snapshot,
+    safe_repair_text,
     score_client_realism,
     semantic_repeat_risk,
     semantic_response_fingerprint,
@@ -132,10 +135,43 @@ def test_single_session_progression() -> None:
     expect(doubt_policy["progressionPausedReason"], "paused progression should expose a reason for instructor debug.")
 
 
+def test_disclosure_ledger() -> None:
+    case_profile = {
+        "hiddenFacts": [
+            {"id": "school_scene", "label": "午饭时独自坐", "disclosed": False},
+            {"id": "sleep", "label": "睡眠受影响", "disclosed": True},
+        ]
+    }
+    ledger = build_disclosure_ledger(case_profile, {
+        "revealedFacts": ["school_scene", "sleep"],
+        "riskSignals": ["passive_self_harm_language"],
+    })
+    by_id = {entry["id"]: entry for entry in ledger}
+    expect(by_id["referral_context"]["kind"] == "referral_known", "referral context must not be counted as newly disclosed")
+    expect(by_id["school_scene"]["kind"] == "newly_disclosed", "first hidden fact disclosure must be new")
+    expect(by_id["sleep"]["kind"] == "client_confirmed", "already disclosed fact must be confirmation")
+    expect(not by_id["risk:passive_self_harm_language"]["traineeVisible"], "risk ledger details must remain hidden from trainee")
+
+
+def test_safety_repair_stays_in_client_voice() -> None:
+    text = safe_repair_text({"caseType": "alcohol_misuse"}, {}, "cantonese")
+    expect("你可以" not in text and "問我" not in text, "safety repair must not coach the trainee from the client voice")
+    expect("唔知可以同邊個講" in text, "safety repair should leave a natural support affordance")
+
+    signals = client_disclosed_risk_signals({
+        "clientText": "夜晚一個人嗰陣，我會覺得心口好緊。",
+        "riskSignals": ["social_withdrawal"],
+        "revealedFacts": [],
+    }, "anxiety_family_invalidated")
+    expect("social_withdrawal" not in signals, "being alone at a time or place is not by itself social withdrawal")
+
+
 def main() -> None:
     test_student_move_analyzer()
     test_semantic_repeat_detection()
     test_single_session_progression()
+    test_disclosure_ledger()
+    test_safety_repair_stays_in_client_voice()
     print("client-detemplate-test ok")
 
 

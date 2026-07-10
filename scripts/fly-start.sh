@@ -37,9 +37,22 @@ fi
 
 if [[ -d /data ]]; then
   mkdir -p /data/corpus /data/adk /data/profiles
-  if [[ ! -f /data/.social-work-data-initialized ]]; then
+  if [[ ! -f /data/.social-work-data-initialized && -f /app/data/corpus/social-work-client-corpus.sqlite ]]; then
     cp -a /app/data/. /data/ 2>/dev/null || true
     touch /data/.social-work-data-initialized
+  fi
+  if [[ ! -f /data/corpus/social-work-client-corpus.sqlite && -n "${CORPUS_SQLITE_RESTORE_URL:-}" ]]; then
+    echo "[fly-start] Restoring corpus SQLite from configured private URL."
+    curl -fL --retry 3 "${CORPUS_SQLITE_RESTORE_URL}" -o /data/corpus/social-work-client-corpus.sqlite.tmp
+    mv /data/corpus/social-work-client-corpus.sqlite.tmp /data/corpus/social-work-client-corpus.sqlite
+  fi
+  if [[ ! -f /data/corpus/social-work-client-embeddings.sqlite && -n "${EMBEDDING_SQLITE_RESTORE_URL:-}" ]]; then
+    echo "[fly-start] Restoring embedding SQLite from configured private URL."
+    curl -fL --retry 3 "${EMBEDDING_SQLITE_RESTORE_URL}" -o /data/corpus/social-work-client-embeddings.sqlite.tmp
+    mv /data/corpus/social-work-client-embeddings.sqlite.tmp /data/corpus/social-work-client-embeddings.sqlite
+  fi
+  if [[ -f /app/data/corpus/corpus-manifest.json ]]; then
+    cp /app/data/corpus/corpus-manifest.json /data/corpus/corpus-manifest.json
   fi
   rm -rf /app/data
   ln -s /data /app/data
@@ -51,6 +64,11 @@ echo "[fly-start] Google voice enabled: ${GOOGLE_VOICE_ENABLED:-false}"
 echo "[fly-start] Google credentials detected: $([[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && echo true || echo false)"
 echo "[fly-start] Rhubarb binary: ${RHUBARB_BIN:-not-set} $([[ -x "${RHUBARB_BIN:-}" ]] && echo available || echo unavailable)"
 echo "[fly-start] Corpus path: $(readlink -f /app/data 2>/dev/null || echo /app/data)"
+if [[ -f /app/data/corpus/social-work-client-corpus.sqlite ]]; then
+  echo "[fly-start] Corpus readiness: ready"
+else
+  echo "[fly-start] Corpus readiness: degraded (restore required; runtime will use seed fallback)"
+fi
 
 node server.mjs &
 APP_PID=$!

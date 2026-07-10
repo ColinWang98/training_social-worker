@@ -12,7 +12,7 @@ This project is a teaching and research prototype. It is not a diagnostic tool, 
 
 - 模拟学生社工与服务对象的多轮访谈。
 - 使用 DeepSeek 生成服务对象回应，由本地 Python ADK sidecar 统一管理个案状态、检索、安全校准、avatar 指令和访谈后督导。
-- 前端使用 React、Three.js、`@pixiv/three-vrm`，默认使用 Streamoji ARKit GLB；John Do ARKit VRM 保留为稳定 fallback/对照 avatar。
+- 前端使用 React、Three.js、`@pixiv/three-vrm`，默认使用 John Do ARKit VRM；Streamoji 和 Haru 只在督导工作台中作为对照 avatar。
 - 支持香港口语粤语服务对象回应、香港繁中 UI，也支持英文 UI/回应切换。
 - 使用本地 SQLite evidence cards / corpus retrieval， 可选本地 embedding rerank。
 - 训练视图默认防剧透，只显示转介摘要和已自然透露的信息；完整个案状态、证据来源、avatar debug 和规则依据只在督导/研究者视图显示。
@@ -55,7 +55,7 @@ npm run dev:all
 http://127.0.0.1:5173/
 ```
 
-### 可选：全站账号密码保护
+### 可选：全站账号密码和角色保护
 
 本地或部署环境可以开启简单访问门禁：
 
@@ -64,9 +64,22 @@ APP_AUTH_ENABLED=true
 APP_AUTH_USERNAME=teacher
 APP_AUTH_PASSWORD=strong-password
 APP_AUTH_SECRET=random-32-byte-secret
+APP_AUTH_ROLE=instructor
 ```
 
-这会保护整个前端、`/api/*` 和语音 WebSocket。它只是 prototype gate，不是正式多用户 LMS 或角色权限系统。
+多账号部署建议显式设置角色：
+
+```bash
+APP_AUTH_USERS_JSON='[{"username":"student01","password":"...","role":"trainee"},{"username":"teacher","password":"...","role":"instructor"}]'
+```
+
+这会保护整个前端、`/api/*` 和语音 WebSocket，并在 Node server 端限制 `/instructor`、`/instructor/evidence` 和 Evidence API。它仍是 prototype gate，不是正式 LMS 或用户数据隔离系统。
+
+桌面网页路由：
+
+- `/training`：学生社工训练工作区。
+- `/instructor`：受保护的督导/研究者控制台。
+- `/instructor/evidence`：受保护的 Evidence Card 审阅页。
 
 ### 可选：Google 粤语语音
 
@@ -276,7 +289,7 @@ The first start copies bundled `data/` into the mounted `/data` volume, then use
 
 The Fly runtime is cloud-first: the deployed machine runs both the Node web server and the Python ADK sidecar. The browser only captures microphone audio and optionally runs the bundled VAD assets served from `/vad/`; it does not require a local ADK, Rhubarb, corpus, or embedding service.
 
-The Docker image is intentionally large because it includes Python dependencies, corpus files, avatar assets, and the local multilingual embedding model. If embedding is not needed in deployment, set:
+The Docker image includes Python dependencies, avatar assets, Rhubarb, and the local multilingual embedding model. Corpus and embedding SQLite files are intentionally excluded from the image and must exist on the Fly volume or be restored from private URLs. If embedding is not needed in deployment, set:
 
 ```bash
 fly secrets set LOCAL_EMBEDDING_ENABLED=false
@@ -285,8 +298,17 @@ fly secrets set LOCAL_EMBEDDING_ENABLED=false
 For multiple deployment accounts, set this instead of `APP_AUTH_USERNAME` and `APP_AUTH_PASSWORD`:
 
 ```bash
-fly secrets set APP_AUTH_USERS_JSON='[{"username":"teacher","password":"..."},{"username":"student01","password":"..."}]'
+fly secrets set APP_AUTH_USERS_JSON='[{"username":"teacher","password":"...","role":"instructor"},{"username":"student01","password":"...","role":"trainee"}]'
 ```
+
+For a new Fly volume, configure private restore URLs or upload the SQLite files before serving training traffic:
+
+```bash
+fly secrets set CORPUS_SQLITE_RESTORE_URL='https://private.example/corpus.sqlite'
+fly secrets set EMBEDDING_SQLITE_RESTORE_URL='https://private.example/embeddings.sqlite'
+```
+
+`/api/health` reports `corpusReadiness.status`, manifest version, expected sizes, and whether restore is required. The service may run in an explicit degraded seed mode when the required corpus is absent.
 
 Anyone with a valid password can access the same prototype. The in-app trainee/instructor toggle is still a UI mode, not role-based authorization.
 
@@ -411,7 +433,7 @@ student text
   -> session trace persistence
 ```
 
-The avatar is driven by semantic directives, not raw LLM bone control. Streamoji GLB is the default avatar and uses a generic humanoid seated adapter plus ARKit expression control; John Do ARKit VRM remains the stable VRM fallback. The frontend maps affect, motion cue, case baseline, and performance plan into seated upper-body motion with idle-first micro movement and stronger reactions only for rupture/risk/emotion-shift moments.
+The avatar is driven by semantic directives, not raw LLM bone control. John Do ARKit VRM is the default avatar and stable quality baseline. Streamoji GLB remains available to instructors and uses a generic humanoid seated adapter plus ARKit expression control. The frontend maps affect, motion cue, case baseline, and performance plan into seated upper-body motion with idle-first micro movement and stronger reactions only for rupture/risk/emotion-shift moments.
 
 ### Mixamo motion candidates
 

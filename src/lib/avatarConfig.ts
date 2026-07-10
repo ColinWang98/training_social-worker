@@ -50,7 +50,7 @@ export const avatarLipSyncProfiles: Record<AvatarLipSyncProfile['id'], AvatarLip
   },
 };
 
-export const DEFAULT_AVATAR_ID = 'streamoji-0sfg';
+export const DEFAULT_AVATAR_ID = 'john-do-arkit';
 
 export const avatarAssets: AvatarAsset[] = [
   {

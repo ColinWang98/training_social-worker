@@ -23,8 +23,11 @@ class FakeCaseState:
 
 
 class FakeSpeechSession:
+    def __init__(self, audio_chunks: list[bytes]) -> None:
+        self.audio_chunks = audio_chunks
+
     def send_audio(self, audio: bytes) -> None:
-        return None
+        self.audio_chunks.append(audio)
 
     def stop(self) -> None:
         return None
@@ -35,12 +38,13 @@ class FakeCoordinator:
         self.event_queue = None
         self.loop = None
         self.student_texts: list[str] = []
+        self.audio_chunks: list[bytes] = []
         self.case_state = FakeCaseState()
 
     def start_speech_stream(self, sample_rate: int, event_queue: Any, loop: Any) -> FakeSpeechSession:
         self.event_queue = event_queue
         self.loop = loop
-        return FakeSpeechSession()
+        return FakeSpeechSession(self.audio_chunks)
 
     def emit(self, event: dict[str, Any]) -> None:
         if not self.event_queue or not self.loop:
@@ -119,6 +123,7 @@ def main() -> None:
             })
             receive_until(ws, "voice_ready", seen)
             receive_until(ws, "listening_ready", seen)
+            ws.send_bytes(b"\x00\x01\x02\x03")
 
             fake.emit({"type": "asr_final", "transcript": "你好"})
             receive_until(ws, "asr_partial", seen)
@@ -132,6 +137,8 @@ def main() -> None:
 
         if fake.student_texts[:2] != ["你好我想講多啲", "第二句"]:
             raise AssertionError(f"Unexpected processed transcripts: {fake.student_texts}")
+        if fake.audio_chunks != [b"\x00\x01\x02\x03"]:
+            raise AssertionError(f"Binary PCM frame was not forwarded: {fake.audio_chunks}")
         committed = [item.get("transcript") for item in seen if item.get("type") == "utterance_committed"]
         if committed[:2] != ["你好我想講多啲", "第二句"]:
             raise AssertionError(f"Unexpected committed transcripts: {committed}")
@@ -161,6 +168,7 @@ def main() -> None:
             "clientResponses": client_texts,
             "timedEvents": timed_events,
             "eventCount": len(seen),
+            "binaryPcmFrames": len(fake.audio_chunks),
         })
     finally:
         service_main.coordinator = original

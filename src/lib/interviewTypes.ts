@@ -35,6 +35,7 @@ export type ResponseLanguage = 'cantonese' | 'english';
 export type ResistanceLevel = 'none' | 'mild' | 'moderate' | 'high';
 export type AvatarDirectivePriority = 'safety' | 'reaction' | 'speaking' | 'idle';
 export type TrainingViewMode = 'trainee' | 'instructor';
+export type AuthRole = 'trainee' | 'instructor';
 export type AvatarGazePattern = 'camera_soft' | 'avoidant' | 'downward' | 'scanning' | 'guarded';
 export type MouthViseme = 'closed' | 'soft' | 'open' | 'wide' | 'rounded' | 'front' | 'fv' | 'rest';
 export type RhubarbMouthShape = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'X';
@@ -283,6 +284,9 @@ export type StudentQuestionAnalysis = {
   riskExploration: boolean;
   prematureAdvice: boolean;
   apologyRepair?: boolean;
+  genericEmpathy?: boolean;
+  doubtOrInvalidating?: boolean;
+  minimalBackchannel?: boolean;
 };
 
 export type PsychologicalState = {
@@ -335,6 +339,22 @@ export type HiddenFact = {
   label: string;
   content: string;
   disclosed: boolean;
+};
+
+export type DisclosureLedgerKind =
+  | 'referral_known'
+  | 'client_confirmed'
+  | 'newly_disclosed'
+  | 'risk_disclosed'
+  | 'inferred_only';
+
+export type DisclosureLedgerEntry = {
+  id: string;
+  label: string;
+  kind: DisclosureLedgerKind;
+  turnId?: string;
+  source: 'referral' | 'client_response' | 'system_inference';
+  traineeVisible: boolean;
 };
 
 export type IssueProgressionStage =
@@ -417,6 +437,7 @@ export type InterviewTurn = {
   text: string;
   timestamp: string;
   revealedFacts?: string[];
+  disclosureLedger?: DisclosureLedgerEntry[];
   scoreSnapshot?: Partial<ScoreSnapshot>;
 };
 
@@ -426,6 +447,12 @@ export type ClientResponse = {
   affect: AffectLabel;
   riskSignals: string[];
   revealedFacts: string[];
+  disclosureLedger?: DisclosureLedgerEntry[];
+  progressionEvidence?: {
+    stage: IssueProgressionStage;
+    transitionReason?: string;
+    newAffordance?: string;
+  };
   stateDelta: Partial<Record<keyof PsychologicalState, number>>;
   motionCue: MotionCue;
   resistanceLevel: ResistanceLevel;
@@ -528,6 +555,11 @@ export type HkPcfAssessment = {
   frameworkLabel: string;
   frameworkBasis: string[];
   scores: Record<HkPcfDomain, number>;
+  domainAssessments?: Record<HkPcfDomain, {
+    status: 'observed' | 'insufficient_evidence' | 'not_observed';
+    confidence: number;
+    evidenceTurnIds: string[];
+  }>;
   evidence: {
     strengths: string[];
     concerns: string[];

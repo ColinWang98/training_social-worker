@@ -1,4 +1,4 @@
-import { FormEvent } from 'react';
+import { FormEvent, useEffect, useRef } from 'react';
 import { Mic, MicOff, Send, ShieldAlert, Square } from 'lucide-react';
 import { ClientResponse, InterviewTurn, ResponseLanguage } from '../lib/interviewTypes';
 import { t } from '../lib/i18n';
@@ -44,6 +44,11 @@ export function InterviewPanel({
   uiLanguage,
 }: InterviewPanelProps) {
   const hasRisk = Boolean(latestClientResponse?.riskSignals.length);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: 'end', behavior: turns.length > 2 ? 'smooth' : 'auto' });
+  }, [isPending, turns]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -80,12 +85,10 @@ export function InterviewPanel({
                 <time>{new Date(turn.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
               </div>
               <p>{turn.text}</p>
-              {turn.revealedFacts?.length ? (
-                <div className="revealedFacts">{t(uiLanguage, 'revealed')}：{turn.revealedFacts.join(', ')}</div>
-              ) : null}
             </article>
           ))
         )}
+        <div ref={chatEndRef} />
       </div>
 
       {errorMessage && <p className="errorText">{errorMessage}</p>}

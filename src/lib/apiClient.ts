@@ -1,4 +1,5 @@
 import {
+  AuthRole,
   CaseProfile,
   ClientResponse,
   EvidenceCardListResponse,
@@ -10,6 +11,13 @@ import {
   SimulationMethod,
   SupervisorReview,
 } from './interviewTypes';
+
+export type AuthSession = {
+  authenticated: boolean;
+  username: string;
+  role: AuthRole;
+  authEnabled: boolean;
+};
 
 type InterviewRequest = {
   caseProfile: CaseProfile;
@@ -79,6 +87,20 @@ export async function requestClientResponse(request: InterviewRequest): Promise<
     throw new Error('Client response failed schema validation.');
   }
   return data;
+}
+
+export async function requestAuthSession(): Promise<AuthSession> {
+  const response = await fetch('/api/auth/session');
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error ?? `Request failed with ${response.status}`);
+  if (
+    data?.authenticated !== true
+    || typeof data.username !== 'string'
+    || !['trainee', 'instructor'].includes(data.role)
+  ) {
+    throw new Error('Authentication session failed schema validation.');
+  }
+  return data as AuthSession;
 }
 
 export async function requestSupervisorReview(request: SupervisorRequest): Promise<SupervisorReview> {
@@ -198,6 +220,12 @@ function isPostSessionSupervisorReport(value: unknown): value is PostSessionSupe
   if (!baseValid) return false;
   if (!report.hkPcfAssessment) return true;
   const hkPcf = report.hkPcfAssessment;
+  const domainAssessments = hkPcf.domainAssessments;
+  const domainAssessmentsValid = !domainAssessments || Object.values(domainAssessments).every((domain) =>
+    ['observed', 'insufficient_evidence', 'not_observed'].includes(domain.status)
+    && typeof domain.confidence === 'number'
+    && Array.isArray(domain.evidenceTurnIds),
+  );
   return (
     typeof hkPcf.frameworkLabel === 'string' &&
     Array.isArray(hkPcf.frameworkBasis) &&
@@ -209,7 +237,8 @@ function isPostSessionSupervisorReport(value: unknown): value is PostSessionSupe
     Array.isArray(hkPcf.evidence.turningPoints) &&
     Array.isArray(hkPcf.evidence.missedOpportunities) &&
     Array.isArray(hkPcf.practiceRecommendations) &&
-    typeof hkPcf.disclaimer === 'string'
+    typeof hkPcf.disclaimer === 'string' &&
+    domainAssessmentsValid
   );
 }
 

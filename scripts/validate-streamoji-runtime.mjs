@@ -14,8 +14,8 @@ function fail(message) {
 
 function assertDefaultAvatar() {
   const source = fs.readFileSync(AVATAR_CONFIG, 'utf8');
-  if (!/DEFAULT_AVATAR_ID[^=]*=\s*['"]streamoji-0sfg['"]/.test(source)) {
-    fail('DEFAULT_AVATAR_ID must be streamoji-0sfg.');
+  if (!/DEFAULT_AVATAR_ID[^=]*=\s*['"]john-do-arkit['"]/.test(source)) {
+    fail('DEFAULT_AVATAR_ID must be john-do-arkit.');
   }
 }
 
@@ -155,7 +155,7 @@ if (!fs.existsSync(STREAMOJI_MODEL)) {
 
     console.log(JSON.stringify({
       model: path.relative(process.cwd(), STREAMOJI_MODEL),
-      defaultAvatar: 'streamoji-0sfg',
+      defaultAvatar: 'john-do-arkit',
       arkitTargetCount: arkitTargets.size,
       drivenMouthMeshes,
       rigCandidates: rigCandidates.slice(0, 5),

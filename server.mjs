@@ -27,6 +27,20 @@ const server = createServer(async (req, res) => {
     if (authResult.setCookie) {
       req.authSetCookie = authResult.setCookie;
     }
+    req.authUser = authResult.user;
+
+    if (req.url === '/api/auth/session') {
+      return sendJsonWithRequest(req, res, 200, {
+        authenticated: true,
+        username: authResult.user.username,
+        role: authResult.user.role,
+        authEnabled: authConfig.enabled,
+      });
+    }
+
+    if (isInstructorOnlyPath(req.url) && authResult.user.role !== 'instructor') {
+      return sendJsonWithRequest(req, res, 403, { error: 'Instructor access required.' });
+    }
 
     if (req.url === '/api/shutdown') {
       return handleShutdown(req, res);
@@ -249,6 +263,10 @@ function nodeReadiness() {
     nodeEnv: process.env.NODE_ENV ?? 'development',
     authEnabled: authConfig.enabled,
     authUsersConfigured: authConfig.users.length,
+    authRolesConfigured: {
+      trainee: authConfig.users.filter((user) => user.role === 'trainee').length,
+      instructor: authConfig.users.filter((user) => user.role === 'instructor').length,
+    },
     secureCookie: authConfig.secureCookie,
     adkServiceUrl,
     voiceWebSocketProxy: '/api/voice-stream',
@@ -307,6 +325,23 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function sendJsonWithRequest(req, res, status, payload) {
+  res.writeHead(status, withAuthCookie(req, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+  }));
+  res.end(JSON.stringify(payload));
+}
+
+function isInstructorOnlyPath(rawUrl) {
+  const pathname = new URL(rawUrl ?? '/', 'http://localhost').pathname;
+  return pathname === '/instructor'
+    || pathname.startsWith('/instructor/')
+    || pathname === '/api/evidence-cards'
+    || pathname === '/api/supervisor-review'
+    || pathname === '/api/session/export';
+}
+
 function sendAuthChallenge(res) {
   res.writeHead(401, {
     'Content-Type': 'application/json',
@@ -343,7 +378,11 @@ function loadAuthUsers() {
       if (!Array.isArray(parsed)) throw new Error('APP_AUTH_USERS_JSON must be an array.');
       return parsed
         .filter((user) => typeof user?.username === 'string' && typeof user?.password === 'string')
-        .map((user) => ({ username: user.username, password: user.password }));
+        .map((user) => ({
+          username: user.username,
+          password: user.password,
+          role: user.role === 'instructor' ? 'instructor' : 'trainee',
+        }));
     } catch (error) {
       console.warn(`Invalid APP_AUTH_USERS_JSON: ${error instanceof Error ? error.message : String(error)}`);
       return [];
@@ -351,26 +390,30 @@ function loadAuthUsers() {
   }
 
   if (process.env.APP_AUTH_USERNAME && process.env.APP_AUTH_PASSWORD) {
-    return [{ username: process.env.APP_AUTH_USERNAME, password: process.env.APP_AUTH_PASSWORD }];
+    return [{
+      username: process.env.APP_AUTH_USERNAME,
+      password: process.env.APP_AUTH_PASSWORD,
+      role: process.env.APP_AUTH_ROLE === 'trainee' ? 'trainee' : 'instructor',
+    }];
   }
 
   return [];
 }
 
 function authenticateRequest(req) {
-  if (!authConfig.enabled) return { ok: true };
+  if (!authConfig.enabled) return { ok: true, user: { username: 'local-dev', role: 'instructor' } };
 
   if (!authConfig.secret || authConfig.users.length === 0) {
     console.warn('APP_AUTH_ENABLED is true but APP_AUTH_SECRET or auth users are missing.');
     return { ok: false };
   }
 
-  const cookieUsername = verifySessionCookie(req.headers.cookie);
-  if (cookieUsername) return { ok: true };
+  const cookieUser = verifySessionCookie(req.headers.cookie);
+  if (cookieUser) return { ok: true, user: cookieUser };
 
-  const basicUsername = verifyBasicAuth(req.headers.authorization);
-  if (basicUsername) {
-    return { ok: true, setCookie: createSessionCookie(basicUsername) };
+  const basicUser = verifyBasicAuth(req.headers.authorization);
+  if (basicUser) {
+    return { ok: true, user: basicUser, setCookie: createSessionCookie(basicUser) };
   }
 
   return { ok: false };
@@ -390,12 +433,12 @@ function verifyBasicAuth(header) {
   const username = decoded.slice(0, separator);
   const password = decoded.slice(separator + 1);
   const match = authConfig.users.find((user) => safeEqual(user.username, username) && safeEqual(user.password, password));
-  return match?.username ?? null;
+  return match ?? null;
 }
 
-function createSessionCookie(username) {
+function createSessionCookie(user) {
   const expiresAt = Date.now() + authConfig.ttlSeconds * 1000;
-  const payload = base64UrlEncode(JSON.stringify({ username, exp: expiresAt }));
+  const payload = base64UrlEncode(JSON.stringify({ username: user.username, role: user.role, exp: expiresAt }));
   const signature = sign(payload);
   const parts = [
     `${authConfig.cookieName}=${payload}.${signature}`,
@@ -420,8 +463,9 @@ function verifySessionCookie(cookieHeader) {
     const session = JSON.parse(base64UrlDecode(payload));
     if (typeof session?.username !== 'string' || typeof session?.exp !== 'number') return null;
     if (Date.now() > session.exp) return null;
-    if (!authConfig.users.some((user) => safeEqual(user.username, session.username))) return null;
-    return session.username;
+    const configuredUser = authConfig.users.find((user) => safeEqual(user.username, session.username));
+    if (!configuredUser || configuredUser.role !== session.role) return null;
+    return { username: configuredUser.username, role: configuredUser.role };
   } catch {
     return null;
   }

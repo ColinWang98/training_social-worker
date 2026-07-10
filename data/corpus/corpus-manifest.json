@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "corpusVersion": "2026-06-15-non-reddit-full",
+  "generatedAt": "2026-06-15T23:03:00+08:00",
+  "runtimeEligibleCards": 109435,
+  "files": [
+    {
+      "name": "social-work-client-corpus.sqlite",
+      "bytes": 319283200,
+      "sha256": "fa16a27c389470ec04245daf71cde2b5f9e331a9d24e5f3b93d9d2f8220c7136",
+      "required": true
+    },
+    {
+      "name": "social-work-client-embeddings.sqlite",
+      "bytes": 255725568,
+      "sha256": "fbcb5983f5c0a98858be86764f34fc847baf175022de4da3e72ff4b3af0c7b90",
+      "required": false
+    }
+  ]
+}

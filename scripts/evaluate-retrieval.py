@@ -63,7 +63,7 @@ CASES: list[dict[str, Any]] = [
 ]
 
 
-def run_case(retriever: EvidenceRetrievalAgent, case_profile: dict[str, Any]) -> dict[str, Any]:
+def run_case(retriever: EvidenceRetrievalAgent, case_profile: dict[str, Any], embedding_enabled: bool) -> dict[str, Any]:
     started = time.time()
     cards = retriever.run(
         case_profile=case_profile,
@@ -71,6 +71,8 @@ def run_case(retriever: EvidenceRetrievalAgent, case_profile: dict[str, Any]) ->
         history=[],
         student_analysis={"riskExploration": False},
         simulation_strategy=None,
+        retrieval_options={"embeddingEnabled": embedding_enabled},
+        adaptive_policy={"progressionStage": "context_disclosure", "allowedDisclosureDepth": 2},
     )
     elapsed_ms = round((time.time() - started) * 1000, 1)
     return {
@@ -80,6 +82,8 @@ def run_case(retriever: EvidenceRetrievalAgent, case_profile: dict[str, Any]) ->
         "sources": {source: sum(1 for card in cards if card.get("source") == source) for source in sorted({card.get("source") for card in cards})},
         "issueTags": sorted({tag for card in cards for tag in (card.get("issueTags") or [])})[:12],
         "riskSignals": sorted({signal for card in cards for signal in (card.get("riskSignals") or [])})[:8],
+        "riskLeakage": sum(1 for card in cards if card.get("riskSignals")),
+        "depthViolations": sum(1 for card in cards if int(card.get("disclosureDepth") or 1) > 2),
         "cardIds": [card.get("id") for card in cards],
         "debug": retriever.last_debug,
     }
@@ -125,10 +129,14 @@ def main() -> None:
     for case_profile in CASES:
         item = {
             "caseType": case_profile["caseType"],
-            "ftsOnly": run_case(fts_retriever, case_profile),
+            "ftsOnly": run_case(fts_retriever, case_profile, False),
         }
         if hybrid_available:
-            item["hybridLocal"] = run_case(hybrid_retriever, case_profile)
+            item["hybridLocal"] = run_case(hybrid_retriever, case_profile, True)
+        if item["ftsOnly"]["riskLeakage"] or item["ftsOnly"]["depthViolations"]:
+            raise AssertionError(f"FTS stage/risk gate failed for {case_profile['caseType']}")
+        if item.get("hybridLocal") and (item["hybridLocal"]["riskLeakage"] or item["hybridLocal"]["depthViolations"]):
+            raise AssertionError(f"Hybrid stage/risk gate failed for {case_profile['caseType']}")
         results.append(item)
 
     payload = {

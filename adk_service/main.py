@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import os
 import uuid
@@ -19,7 +20,7 @@ try:
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised when deps are missing
     raise RuntimeError(
         "Missing ADK service dependencies. Run: "
-        "python3 -m venv .venv-adk && "
+        "python3.11 -m venv .venv-adk && "
         ".venv-adk/bin/pip install -r adk_service/requirements.txt"
     ) from exc
 
@@ -427,7 +428,18 @@ async def voice_stream(websocket: WebSocket) -> None:
     event_task = asyncio.create_task(forward_speech_events())
     try:
         while True:
-            message = await websocket.receive_json()
+            packet = await websocket.receive()
+            if packet.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect()
+            audio_bytes = packet.get("bytes")
+            if isinstance(audio_bytes, bytes):
+                if speech_session and audio_bytes:
+                    speech_session.send_audio(audio_bytes)
+                continue
+            message_text = packet.get("text")
+            if not isinstance(message_text, str):
+                continue
+            message = json.loads(message_text)
             message_type = message.get("type")
             if message_type == "start":
                 state["sessionId"] = message.get("sessionId")

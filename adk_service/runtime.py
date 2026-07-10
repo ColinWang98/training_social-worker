@@ -405,7 +405,7 @@ def client_disclosed_risk_signals(response: dict[str, Any], case_type: str | Non
             kept.append(signal)
         elif signal == "hopelessness" and re.search(r"絕望|冇希望|沒有希望|hopeless|冇用|唔值得", evidence, re.I):
             kept.append(signal)
-        elif signal == "social_withdrawal" and re.search(r"孤立|退縮|避開|一個人|social withdrawal|isolation", evidence, re.I):
+        elif signal == "social_withdrawal" and re.search(r"孤立|退縮|避開|social withdrawal|isolation", evidence, re.I):
             kept.append(signal)
         elif signal == "safety_review_repaired":
             kept.append(signal)
@@ -1285,6 +1285,44 @@ def dot_product(left: list[float], right: list[float]) -> float:
     return float(sum(a * b for a, b in zip(left, right)))
 
 
+def corpus_manifest_status(root_dir: Path) -> dict[str, Any]:
+    manifest_path = root_dir / "data" / "corpus" / "corpus-manifest.json"
+    if not manifest_path.exists():
+        return {"status": "manifest-missing", "ready": False, "restoreRequired": True, "files": []}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"status": "manifest-invalid", "ready": False, "restoreRequired": True, "error": str(exc), "files": []}
+    file_statuses = []
+    required_ready = True
+    for item in manifest.get("files", []):
+        path = manifest_path.parent / str(item.get("name", ""))
+        exists = path.exists()
+        expected_bytes = positive_int(item.get("bytes"), 0)
+        actual_bytes = path.stat().st_size if exists else 0
+        size_matches = bool(exists and (not expected_bytes or expected_bytes == actual_bytes))
+        required = bool(item.get("required"))
+        if required and not size_matches:
+            required_ready = False
+        file_statuses.append({
+            "name": item.get("name"),
+            "required": required,
+            "exists": exists,
+            "sizeMatches": size_matches,
+            "expectedBytes": expected_bytes,
+            "actualBytes": actual_bytes,
+            "sha256": item.get("sha256"),
+        })
+    return {
+        "status": "ready" if required_ready else "degraded",
+        "ready": required_ready,
+        "restoreRequired": not required_ready,
+        "corpusVersion": manifest.get("corpusVersion"),
+        "runtimeEligibleCards": manifest.get("runtimeEligibleCards"),
+        "files": file_statuses,
+    }
+
+
 def resolve_local_embedding_snapshot(model_name: str) -> Path | None:
     if "/" not in model_name:
         path = Path(model_name)
@@ -1667,13 +1705,15 @@ class EvidenceRetrievalAgent(ManagedAgent):
         student_analysis: dict[str, bool],
         simulation_strategy: dict[str, Any] | None = None,
         retrieval_options: dict[str, Any] | None = None,
+        adaptive_policy: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        query = self._build_query(case_profile, student_text, history, student_analysis, simulation_strategy)
+        query = self._build_query(case_profile, student_text, history, student_analysis, simulation_strategy, adaptive_policy)
         query_tokens = tokenize(query)
         preferred = preferred_evidence(case_profile.get("caseType"))
         if self._backend == "sqlite":
-            return self._run_sqlite(case_profile, student_analysis, simulation_strategy, query, query_tokens, preferred, retrieval_options)
-        return self._score_and_balance(self.cards, query_tokens, preferred, case_profile, student_analysis, simulation_strategy)
+            return self._run_sqlite(case_profile, student_analysis, simulation_strategy, query, query_tokens, preferred, retrieval_options, adaptive_policy)
+        eligible = self._filter_runtime_candidates(self.cards, student_analysis, adaptive_policy)
+        return self._score_and_balance(eligible, query_tokens, preferred, case_profile, student_analysis, simulation_strategy)
 
     def _build_query(
         self,
@@ -1682,6 +1722,7 @@ class EvidenceRetrievalAgent(ManagedAgent):
         history: list[dict[str, Any]],
         student_analysis: dict[str, bool],
         simulation_strategy: dict[str, Any] | None,
+        adaptive_policy: dict[str, Any] | None,
     ) -> str:
         return " ".join(
             [
@@ -1689,9 +1730,10 @@ class EvidenceRetrievalAgent(ManagedAgent):
                 str(case_profile.get("simulatorStage", "")),
                 case_profile.get("client", {}).get("presentingContext", ""),
                 " ".join(case_profile.get("persona", {}).get("currentStressors", [])),
-                " ".join(fact.get("label", "") for fact in case_profile.get("hiddenFacts", []) if not fact.get("disclosed")),
                 " ".join(turn.get("text", "") for turn in history[-4:]),
                 student_text,
+                str((adaptive_policy or {}).get("progressionStage", "initial_contact")),
+                f"disclosure-depth-{(adaptive_policy or {}).get('allowedDisclosureDepth', 1)}",
                 "risk safety self-harm withdrawal" if student_analysis.get("riskExploration") else "",
                 " ".join((simulation_strategy or {}).get("retrievalBoostTags", [])),
             ]
@@ -1706,12 +1748,14 @@ class EvidenceRetrievalAgent(ManagedAgent):
         query_tokens: set[str],
         preferred: dict[str, list[str]],
         retrieval_options: dict[str, Any] | None,
+        adaptive_policy: dict[str, Any] | None,
     ) -> list[dict[str, Any]]:
         embedding_requested = bool((retrieval_options or {}).get("embeddingEnabled"))
         fts_candidates = self._sqlite_fts_candidates(query, preferred, simulation_strategy)
         metadata_limit = 100 if len(fts_candidates) >= 30 else 240 - len(fts_candidates)
         metadata_candidates = self._sqlite_preferred_candidates(preferred, simulation_strategy, metadata_limit)
         deduped = list({card["id"]: card for card in [*fts_candidates, *metadata_candidates]}.values())
+        deduped = self._filter_runtime_candidates(deduped, student_analysis, adaptive_policy)
         self.last_debug = {
             "backend": "sqlite",
             "retrievalMode": "sqlite-fts",
@@ -1739,6 +1783,22 @@ class EvidenceRetrievalAgent(ManagedAgent):
         self.last_debug["embeddingStatus"] = self.embedding_store.status
         self.last_debug["sourceDistribution"] = source_distribution(selected)
         return selected
+
+    def _filter_runtime_candidates(
+        self,
+        cards: list[dict[str, Any]],
+        student_analysis: dict[str, bool],
+        adaptive_policy: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        risk_allowed = bool(student_analysis.get("riskExploration"))
+        allowed_depth = max(1, min(4, positive_int((adaptive_policy or {}).get("allowedDisclosureDepth"), 1)))
+        return [
+            card
+            for card in cards
+            if card.get("quality") != "reject"
+            and (risk_allowed or not card.get("riskSignals"))
+            and positive_int(card.get("disclosureDepth"), 1) <= allowed_depth
+        ]
 
     def _hybrid_score_and_balance(
         self,
@@ -1784,8 +1844,6 @@ class EvidenceRetrievalAgent(ManagedAgent):
             )
             if card.get("quality") == "review":
                 final_score -= 0.4
-            if card.get("riskSignals") and not student_analysis.get("riskExploration"):
-                final_score -= 2.5
             if final_score > 0:
                 scored.append((final_score, card))
         scored.sort(key=lambda item: item[0], reverse=True)
@@ -2568,6 +2626,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
 
     def health(self) -> dict[str, Any]:
         embedding_stats = self.evidence_retriever.embedding_store.stats(self.evidence_retriever.card_count)
+        corpus_readiness = corpus_manifest_status(self.root_dir)
         agents = [
             self,
             self.strategy_service,
@@ -2632,6 +2691,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "sessionStore": str(self.sessions.db_path),
             "sessionBackend": self.sessions.backend,
             "corpusBackend": self.evidence_retriever.backend,
+            "corpusReadiness": corpus_readiness,
             "retrievalMode": self.evidence_retriever.retrieval_mode,
             "embeddingEnabled": embedding_stats["enabled"],
             "embeddingModel": embedding_stats["model"],
@@ -2701,6 +2761,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             student_analysis,
             simulation_strategy,
             retrieval_options,
+            adaptive_policy,
         )
         evidence_summary = self.evidence_retriever.summarize(cards, case_profile.get("caseType"))
         enriched = {
@@ -2745,6 +2806,12 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
 
         next_case = self.case_state.apply_response(case_profile, response)
         updated_continuity = build_session_continuity(case_profile, history, prior_events, student_analysis, response, adaptive_policy)
+        response["disclosureLedger"] = build_disclosure_ledger(case_profile, response)
+        response["progressionEvidence"] = {
+            "stage": updated_continuity.get("currentIssueStage", adaptive_policy.get("progressionStage", "initial_contact")),
+            "transitionReason": adaptive_policy.get("issueStageReason"),
+            "newAffordance": adaptive_policy.get("requiredFollowUpAffordance") or adaptive_policy.get("minFollowUpAffordance"),
+        }
         response["adaptivePolicySnapshot"] = adaptive_policy
         response["sessionContinuitySnapshot"] = updated_continuity
         response["contextConsistencyAssessment"] = assess_context_consistency(enriched, response)
@@ -2957,6 +3024,46 @@ def build_session_continuity(
     }
 
 
+def build_disclosure_ledger(case_profile: dict[str, Any], response: dict[str, Any]) -> list[dict[str, Any]]:
+    ledger: list[dict[str, Any]] = [
+        {
+            "id": "referral_context",
+            "label": "轉介摘要",
+            "kind": "referral_known",
+            "source": "referral",
+            "traineeVisible": True,
+        }
+    ]
+    hidden_facts = case_profile.get("hiddenFacts") if isinstance(case_profile.get("hiddenFacts"), list) else []
+    revealed = {str(item).strip().lower() for item in response.get("revealedFacts", []) if str(item).strip()}
+    risk_signals = unique_strings(response.get("riskSignals", []))
+    for fact in hidden_facts:
+        fact_id = str(fact.get("id", ""))
+        fact_label = str(fact.get("label", fact_id))
+        if fact_id.lower() not in revealed and fact_label.lower() not in revealed:
+            continue
+        ledger.append(
+            {
+                "id": fact_id or fact_label,
+                "label": fact_label,
+                "kind": "client_confirmed" if fact.get("disclosed") else "newly_disclosed",
+                "source": "client_response",
+                "traineeVisible": True,
+            }
+        )
+    for signal in risk_signals:
+        ledger.append(
+            {
+                "id": f"risk:{signal}",
+                "label": signal,
+                "kind": "risk_disclosed",
+                "source": "client_response",
+                "traineeVisible": False,
+            }
+        )
+    return ledger
+
+
 def extract_language_patterns(text: Any) -> list[str]:
     text = str(text or "")
     patterns = []
@@ -3072,7 +3179,7 @@ def evidence_card_prompt_signal(card: dict[str, Any]) -> dict[str, Any]:
         "source": card.get("source"),
         "clientGroup": card.get("clientGroup"),
         "issueTags": card.get("issueTags"),
-        "workerMove": card.get("workerMove"),
+        "workerMoveType": worker_move_type_from_card(card),
         "affect": card.get("affect"),
         "riskSignals": card.get("riskSignals"),
         "resistanceType": card.get("resistanceType"),
@@ -3081,6 +3188,16 @@ def evidence_card_prompt_signal(card: dict[str, Any]) -> dict[str, Any]:
         "quality": card.get("quality"),
         "reactionPattern": reaction_pattern_from_card(card),
     }
+
+
+def worker_move_type_from_card(card: dict[str, Any]) -> str:
+    if card.get("riskSignals"):
+        return "risk_related_context"
+    if card.get("changeTalk"):
+        return "evokes_change_talk"
+    if card.get("resistanceType"):
+        return "elicits_client_resistance"
+    return "supportive_or_exploratory_context"
 
 
 def reaction_pattern_from_card(card: dict[str, Any]) -> str:
@@ -3885,6 +4002,8 @@ Return exactly this JSON shape:
 For hkPcfAssessment, use the deterministic seed below as the scoring anchor. You may rewrite
 evidence and recommendations in the requested report language, but do not invent
 facts or change the competency meaning.
+- If a domain is marked insufficient_evidence, describe the evidence limit instead of assigning a weakness or missed opportunity.
+- Do not mention protective factors, recent events, relationships, or hidden facts unless they appear in knownFacts or the transcript.
 Base the report on these frameworks:
 {frameworks_text}
 
@@ -3897,7 +4016,6 @@ Case:
   "caseType": case_profile.get("caseType"),
   "issueLabel": case_profile.get("issueLabel"),
   "simulatorStage": case_profile.get("simulatorStage"),
-  "riskProfile": case_profile.get("riskProfile"),
   "knownFacts": [fact for fact in case_profile.get("hiddenFacts", []) if fact.get("disclosed")],
 }, ensure_ascii=False)}
 
@@ -3906,12 +4024,6 @@ Session trace summary:
 
 HK SWRB-aligned PCF seed:
 {json.dumps(payload.get("hkPcfAssessmentSeed"), ensure_ascii=False)}
-
-Grounding profile summary:
-{json.dumps(payload.get("groundingProfileSnapshot"), ensure_ascii=False)}
-
-Person-in-Environment / Micro-Meso-Macro context:
-{json.dumps(payload.get("pieContextSnapshot"), ensure_ascii=False)}
 
 Transcript:
 {transcript}
@@ -4012,6 +4124,7 @@ def build_hk_pcf_assessment(case_profile: dict[str, Any], trace: dict[str, Any])
     turns = trace.get("turns") if isinstance(trace.get("turns"), list) else []
     summary = summarize_post_session_trace(trace)
     move_counts = summary["studentMoveCounts"]
+    actual_turn_count = summary["turnCount"]
     turn_count = max(1, summary["turnCount"])
     risk_signals = summary["riskSignals"]
     revealed_facts = summary["revealedFacts"]
@@ -4052,6 +4165,26 @@ def build_hk_pcf_assessment(case_profile: dict[str, Any], trace: dict[str, Any])
         "riskSafetyAndSafeguarding": clamp_score((4.0 if risk_needs_follow_up else 5.2) + (2.4 if risk_followed_up else 0.0) + risk_ratio * 1.8 + planning_mentions * 0.15 - (2.4 if risk_needs_follow_up and not risk_followed_up else 0.0)),
         "interventionPlanningAndReferral": clamp_score(3.8 + min(2.4, planning_mentions * 0.38) + min(1.2, strengths_mentions * 0.25) + (0.8 if risk_needs_follow_up and risk_followed_up else 0.0) - premature_ratio * 1.2),
         "professionalReflectionAndUseOfSupervision": clamp_score(4.4 + apology_ratio * 1.8 + reflective_ratio * 1.0 - judgment_ratio * 1.4 + (0.5 if moderate_or_high_resistance and apology_ratio else 0.0)),
+    }
+    domain_evidence_ids = hk_pcf_domain_evidence_turn_ids(turns)
+    domain_assessments = {
+        domain: {
+            "status": (
+                "observed"
+                if evidence_ids
+                else "not_observed"
+                if actual_turn_count >= 4
+                else "insufficient_evidence"
+            ),
+            "confidence": round(
+                min(0.95, 0.35 + len(evidence_ids) * 0.18 + actual_turn_count * 0.04)
+                if evidence_ids
+                else min(0.55, 0.15 + actual_turn_count * 0.08),
+                2,
+            ),
+            "evidenceTurnIds": evidence_ids,
+        }
+        for domain, evidence_ids in domain_evidence_ids.items()
     }
 
     strengths: list[str] = []
@@ -4120,6 +4253,7 @@ def build_hk_pcf_assessment(case_profile: dict[str, Any], trace: dict[str, Any])
         "frameworkLabel": HK_PCF_FRAMEWORK_LABEL,
         "frameworkBasis": HK_PCF_FRAMEWORK_BASIS,
         "scores": scores,
+        "domainAssessments": domain_assessments,
         "evidence": {
             "strengths": unique_strings(strengths)[:5],
             "concerns": unique_strings(concerns)[:5],
@@ -4155,6 +4289,39 @@ def build_hk_pcf_assessment(case_profile: dict[str, Any], trace: dict[str, Any])
     }
 
 
+def hk_pcf_domain_evidence_turn_ids(turns: list[dict[str, Any]]) -> dict[str, list[str]]:
+    evidence: dict[str, list[str]] = {domain: [] for domain in HK_PCF_DOMAINS}
+    context_pattern = r"家人|爸爸|媽媽|父母|老師|同學|朋友|學校|工作|社區|屋企|家庭|資源|服務|轉介|支援"
+    ethics_pattern = r"保密|私隱|資料|權利|界線|角色|同意|知情|安全"
+    choice_pattern = r"你想|你願意|你可以選|可以唔講|慢慢|按你步伐|選擇|決定|自主|自決"
+    diversity_pattern = r"污名|標籤|歧視|文化|身份|權力|被看低|羞恥|唔係你錯"
+    planning_pattern = r"下一步|計劃|安全|轉介|資源|支援|跟進|可以搵|一齊諗"
+    for turn in turns:
+        turn_id = str(turn.get("turnId") or "turn")
+        text = str(turn.get("studentText") or "")
+        analysis = turn.get("studentAnalysis") if isinstance(turn.get("studentAnalysis"), dict) else {}
+        rupture = bool(analysis.get("mockingOrDismissive") or analysis.get("doubtOrInvalidating") or analysis.get("judgmentalOrDirective"))
+        if analysis.get("openQuestion") or analysis.get("reflectiveListening") or analysis.get("genericEmpathy") or rupture:
+            evidence["engagementAndRelationship"].append(turn_id)
+        if analysis.get("openQuestion") or analysis.get("riskExploration") or turn.get("revealedFacts"):
+            evidence["assessmentAndInformationGathering"].append(turn_id)
+        if re.search(context_pattern, text, re.I):
+            evidence["personInEnvironmentAndHongKongContext"].append(turn_id)
+        if re.search(ethics_pattern, text, re.I) or rupture or analysis.get("apologyRepair"):
+            evidence["ethicsConfidentialityAndBoundaries"].append(turn_id)
+        if re.search(choice_pattern, text, re.I) or analysis.get("prematureAdvice") or analysis.get("judgmentalOrDirective"):
+            evidence["selfDeterminationAndInformedChoice"].append(turn_id)
+        if re.search(diversity_pattern, text, re.I) or rupture:
+            evidence["diversityAntiDiscriminationAndCulturalSensitivity"].append(turn_id)
+        if analysis.get("riskExploration") or turn.get("riskSignals"):
+            evidence["riskSafetyAndSafeguarding"].append(turn_id)
+        if re.search(planning_pattern, text, re.I) or analysis.get("prematureAdvice"):
+            evidence["interventionPlanningAndReferral"].append(turn_id)
+        if analysis.get("reflectiveListening") or analysis.get("apologyRepair"):
+            evidence["professionalReflectionAndUseOfSupervision"].append(turn_id)
+    return {domain: unique_strings(ids) for domain, ids in evidence.items()}
+
+
 def count_matches(text: str, pattern: str) -> int:
     return len(re.findall(pattern, text, re.I))
 
@@ -4186,6 +4353,7 @@ def merge_hk_pcf_assessment(candidate: Any, seed: dict[str, Any], language: str 
         merged["frameworkBasis"] = HK_PCF_FRAMEWORK_BASIS
         merged["disclaimer"] = HK_PCF_DISCLAIMER
     merged["scores"] = seed["scores"]
+    merged["domainAssessments"] = seed.get("domainAssessments", {})
     return merged
 
 
@@ -5416,12 +5584,12 @@ def safe_repair_text(case_profile: dict[str, Any], response: dict[str, Any], lan
             return "I can say I'm scared of withdrawal and relapsing, but I don't want to get into specific details. What I need right now is help finding safer support."
         if case_type == "student_depression_bullying":
             return "I don't want to describe it too specifically because that scares me. But sometimes the thought does come up, and I need someone to help me check whether I'm safe right now."
-        return "I don't want to go into specific details, but I really feel like I'm not coping. You can ask me slowly whether I'm safe right now, and whether there is anyone around who can help."
+        return "I don't want to go into specific details, but I really feel like I'm not coping. I don't know who I can talk to without making everything feel bigger."
     if case_type == "substance_recovery_meth":
         return "我可以講到我好驚戒斷同復發，但啲太具體嘅做法我唔想講。其實我而家最需要係有人幫我搵一個安全啲嘅支援方法。"
     if case_type == "student_depression_bullying":
         return "我唔想講到太具體，因為我自己都驚。但我可以講，有時個念頭會出現，我需要有人陪我確認而家係咪安全。"
-    return "我唔想講太具體嘅細節，但我而家真係有啲頂唔順。你可以慢慢問我而家安唔安全，同身邊有冇人可以幫到。"
+    return "我唔想講太具體嘅細節，但我而家真係有啲頂唔順。我又唔知可以同邊個講，驚一講件事就會搞到更大。"
 
 
 def next_simulator_stage(case_profile: dict[str, Any], response: dict[str, Any]) -> str:
@@ -5528,6 +5696,17 @@ def is_hk_pcf_assessment(value: Any) -> bool:
         return False
     scores = value.get("scores")
     evidence = value.get("evidence")
+    domains = value.get("domainAssessments")
+    domains_valid = domains is None or (
+        isinstance(domains, dict)
+        and all(
+            isinstance(domains.get(key), dict)
+            and domains[key].get("status") in {"observed", "insufficient_evidence", "not_observed"}
+            and isinstance(domains[key].get("confidence"), (int, float))
+            and isinstance(domains[key].get("evidenceTurnIds"), list)
+            for key in HK_PCF_DOMAINS
+        )
+    )
     return (
         isinstance(value.get("frameworkLabel"), str)
         and isinstance(value.get("frameworkBasis"), list)
@@ -5540,4 +5719,5 @@ def is_hk_pcf_assessment(value: Any) -> bool:
         and isinstance(evidence.get("missedOpportunities"), list)
         and isinstance(value.get("practiceRecommendations"), list)
         and isinstance(value.get("disclaimer"), str)
+        and domains_valid
     )

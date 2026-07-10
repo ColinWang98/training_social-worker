@@ -5,7 +5,7 @@ Local Python sidecar for the social-work client simulator.
 ## Run
 
 ```bash
-python3 -m venv .venv-adk
+python3.11 -m venv .venv-adk
 .venv-adk/bin/pip install -r adk_service/requirements.txt
 .venv-adk/bin/python -m uvicorn adk_service.main:app --host 127.0.0.1 --port 8765
 ```

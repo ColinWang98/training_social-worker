@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, CheckCircle2, Eye, EyeOff, FileText, Network, ShieldAlert, Sparkles, X } from 'lucide-react';
+import { Activity, CheckCircle2, FileText, Network, ShieldAlert, Sparkles, X } from 'lucide-react';
 import { getKnownFacts, getRecentEvents, getUnrevealedFacts } from '../lib/caseEngine';
 import {
   CaseProfile,
@@ -45,7 +45,11 @@ type CasePanelProps = {
   onRetrievalOptionsChange: (options: RetrievalOptions) => void;
   onVrmaFile: (file: File | null) => void;
   uiLanguage: ResponseLanguage;
+  viewMode?: TrainingViewMode;
+  instructorTab?: InstructorTab;
 };
+
+export type InstructorTab = 'session' | 'case' | 'retrieval' | 'avatar';
 
 export function CasePanel({
   caseProfile,
@@ -77,22 +81,19 @@ export function CasePanel({
   onRetrievalOptionsChange,
   onVrmaFile,
   uiLanguage,
+  viewMode = 'trainee',
+  instructorTab,
 }: CasePanelProps) {
   const state = caseProfile.psychologicalState;
   const knownFacts = getKnownFacts(caseProfile);
   const unrevealedFacts = getUnrevealedFacts(caseProfile);
-  const [viewMode, setViewMode] = useState<TrainingViewMode>('trainee');
   const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
   const isInstructor = viewMode === 'instructor';
+  const showTab = (tab: InstructorTab) => !isInstructor || !instructorTab || instructorTab === tab;
 
   useEffect(() => {
-    setViewMode('trainee');
     setIsReportDialogOpen(false);
   }, [caseProfile.id]);
-
-  useEffect(() => {
-    setIsReportDialogOpen(Boolean(postSessionReport));
-  }, [postSessionReport]);
 
   useEffect(() => {
     if (!isReportDialogOpen) return undefined;
@@ -105,35 +106,7 @@ export function CasePanel({
 
   return (
     <aside className="casePanel" aria-label={t(uiLanguage, 'panelAria')}>
-      <section className="sideSection modeSection">
-        <div className="sectionTitle">
-          {isInstructor ? <Eye size={16} /> : <EyeOff size={16} />}
-          <h2>{t(uiLanguage, 'displayMode')}</h2>
-        </div>
-        <div className="modeSwitch" role="group" aria-label={t(uiLanguage, 'displayMode')}>
-          <button
-            className={viewMode === 'trainee' ? 'active' : ''}
-            type="button"
-            onClick={() => setViewMode('trainee')}
-          >
-            {t(uiLanguage, 'traineeMode')}
-          </button>
-          <button
-            className={viewMode === 'instructor' ? 'active' : ''}
-            type="button"
-            onClick={() => setViewMode('instructor')}
-          >
-            {t(uiLanguage, 'instructorMode')}
-          </button>
-        </div>
-        <p className="mutedText">
-          {isInstructor
-            ? t(uiLanguage, 'instructorModeHint')
-            : t(uiLanguage, 'traineeModeHint')}
-        </p>
-      </section>
-
-      <section className="sideSection">
+      {showTab('case') && <section className="sideSection">
         <div className="sectionTitle">
           <Activity size={16} />
           <h2>{t(uiLanguage, 'caseState')}</h2>
@@ -174,10 +147,11 @@ export function CasePanel({
             <p>{observableStateHint(caseProfile, motionCue, uiLanguage)}</p>
           </div>
         )}
-      </section>
+      </section>}
 
       {isInstructor && (
         <>
+          {showTab('retrieval') && <>
           <section className="sideSection">
             <div className="sectionTitle">
               <Activity size={16} />
@@ -219,7 +193,9 @@ export function CasePanel({
               </>
             )}
           </section>
+          </>}
 
+          {showTab('retrieval') && <>
           <section className="sideSection">
             <div className="sectionTitle">
               <FileText size={16} />
@@ -258,7 +234,9 @@ export function CasePanel({
               <p className="mutedText">服務對象回應生成後，這裡會顯示本輪檢索來源摘要。</p>
             )}
           </section>
+          </>}
 
+          {showTab('case') && <>
           <section className="sideSection">
             <div className="sectionTitle">
               <FileText size={16} />
@@ -298,10 +276,11 @@ export function CasePanel({
               ))}
             </div>
           </section>
+          </>}
         </>
       )}
 
-      <section className="sideSection">
+      {showTab('retrieval') && <section className="sideSection">
         <div className="sectionTitle">
           <Sparkles size={16} />
           <h2>{t(uiLanguage, 'supervision')}</h2>
@@ -338,9 +317,9 @@ export function CasePanel({
         ) : (
           <p className="mutedText">{t(uiLanguage, 'endSessionHint')}</p>
         )}
-      </section>
+      </section>}
 
-      <section className="sideSection">
+      {showTab('session') && <section className="sideSection">
         <h2>{t(uiLanguage, 'revealedInfo')}</h2>
         {isInstructor && (
           <p className="mutedText">
@@ -355,10 +334,11 @@ export function CasePanel({
             <span key={fact.id}>{fact.label}</span>
           ))}
         </div>
-      </section>
+      </section>}
 
       {isInstructor && (
         <>
+          {showTab('avatar') && <>
           <section className="sideSection">
             <div className="sectionTitle">
               <Sparkles size={16} />
@@ -372,7 +352,9 @@ export function CasePanel({
             </div>
             <p className="mutedText">{caseProfile.avatarBaseline.postureLabel}</p>
           </section>
+          </>}
 
+          {showTab('case') && <>
           <section className="sideSection">
             <div className="sectionTitle">
               <FileText size={16} />
@@ -407,7 +389,9 @@ export function CasePanel({
               <p className="mutedText">服務對象回應後，這裡會顯示本輪使用的 grounding profile 與 micro/meso/macro 摘要。</p>
             )}
           </section>
+          </>}
 
+          {showTab('session') && <>
           <section className="sideSection">
             <div className="sectionTitle">
               <Activity size={16} />
@@ -469,15 +453,17 @@ export function CasePanel({
               </>
             )}
           </section>
+          </>}
 
-          <DebriefSection
+          {showTab('retrieval') && <DebriefSection
             caseProfile={caseProfile}
             evidenceSummary={evidenceSummary}
             postSessionReport={postSessionReport}
             knownFacts={knownFacts}
             unrevealedFacts={unrevealedFacts}
-          />
+          />}
 
+          {showTab('avatar') && <>
           <section className="sideSection">
             <h2>{uiLanguage === 'english' ? 'Avatar Motion' : 'Avatar 動作'}</h2>
             <p className="motionCue">{motionPrompt(uiLanguage, motionCue)}</p>
@@ -677,30 +663,16 @@ export function CasePanel({
             </label>
             <p className="statusText">{statusMessage}</p>
           </section>
+          </>}
         </>
       )}
-      {postSessionReport && isReportDialogOpen && (
-        <div className="reportDialogOverlay" role="presentation" onMouseDown={() => setIsReportDialogOpen(false)}>
-          <section
-            aria-labelledby="post-session-report-title"
-            aria-modal="true"
-            className="reportDialog"
-            role="dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <header className="reportDialogHeader">
-              <div>
-                <h2 id="post-session-report-title">{t(uiLanguage, 'fullReport')}</h2>
-                <p>{t(uiLanguage, 'fullReportSubtitle')}</p>
-              </div>
-              <button aria-label={t(uiLanguage, 'closeReport')} className="iconButton" type="button" onClick={() => setIsReportDialogOpen(false)}>
-                <X size={18} />
-              </button>
-            </header>
-            <PostSessionReportView report={postSessionReport} detailed={isInstructor} uiLanguage={uiLanguage} />
-          </section>
-        </div>
-      )}
+      <PostSessionReportDialog
+        detailed={isInstructor}
+        onClose={() => setIsReportDialogOpen(false)}
+        open={Boolean(postSessionReport && isReportDialogOpen)}
+        report={postSessionReport}
+        uiLanguage={uiLanguage}
+      />
     </aside>
   );
 }
@@ -722,7 +694,45 @@ function observableStateHint(caseProfile: CaseProfile, motionCue: MotionCue, uiL
   return t(uiLanguage, 'observableNoFacts');
 }
 
-function PostSessionReportView({
+export function PostSessionReportDialog({
+  report,
+  open,
+  detailed,
+  onClose,
+  uiLanguage,
+}: {
+  report: PostSessionSupervisorReport | null;
+  open: boolean;
+  detailed: boolean;
+  onClose: () => void;
+  uiLanguage: ResponseLanguage;
+}) {
+  if (!report || !open) return null;
+  return (
+    <div className="reportDialogOverlay" role="presentation" onMouseDown={onClose}>
+      <section
+        aria-labelledby="post-session-report-title"
+        aria-modal="true"
+        className="reportDialog"
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="reportDialogHeader">
+          <div>
+            <h2 id="post-session-report-title">{t(uiLanguage, 'fullReport')}</h2>
+            <p>{t(uiLanguage, 'fullReportSubtitle')}</p>
+          </div>
+          <button aria-label={t(uiLanguage, 'closeReport')} className="iconButton" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <PostSessionReportView report={report} detailed={detailed} uiLanguage={uiLanguage} />
+      </section>
+    </div>
+  );
+}
+
+export function PostSessionReportView({
   report,
   detailed,
   uiLanguage,
@@ -733,30 +743,34 @@ function PostSessionReportView({
 }) {
   return (
     <div className="postSessionReport">
-      <div className="reportBlock">
-        <h3>{t(uiLanguage, 'overallPerformance')}</h3>
-        <p>{report.overallSummary}</p>
+      <div className="reportOverviewColumn">
+        <div className="reportBlock reportSummaryLead">
+          <h3>{t(uiLanguage, 'overallPerformance')}</h3>
+          <p>{report.overallSummary}</p>
+        </div>
+        {!report.hkPcfAssessment && (
+          <RadarScoreChart
+            labels={competencyLabels}
+            scores={report.competencyScores}
+            title={uiLanguage === 'english' ? 'Supervision competency radar' : '督導能力雷達圖'}
+          />
+        )}
+        {report.hkPcfAssessment && <HkPcfAssessmentView assessment={report.hkPcfAssessment} detailed={detailed} uiLanguage={uiLanguage} />}
+        {!report.hkPcfAssessment && <div className="scoreGrid">
+          {Object.entries(report.competencyScores).map(([label, value]) => (
+            <Metric key={label} label={competencyLabel(label, uiLanguage)} value={value} max={10} />
+          ))}
+        </div>}
       </div>
-      {!report.hkPcfAssessment && (
-        <RadarScoreChart
-          labels={competencyLabels}
-          scores={report.competencyScores}
-          title={uiLanguage === 'english' ? 'Supervision competency radar' : '督導能力雷達圖'}
-        />
-      )}
-      <div className="scoreGrid">
-        {Object.entries(report.competencyScores).map(([label, value]) => (
-          <Metric key={label} label={competencyLabel(label, uiLanguage)} value={value} max={10} />
-        ))}
+      <div className="reportEvidenceColumn">
+        <TurningPointList items={report.processReview.turningPoints} detailed={detailed} uiLanguage={uiLanguage} />
+        <FeedbackList title={t(uiLanguage, 'effectiveMoments')} items={report.processReview.effectiveMoments} />
+        <FeedbackList title={t(uiLanguage, 'missedOpportunities')} items={report.processReview.missedOpportunities} />
+        <FeedbackList title={t(uiLanguage, 'caseFramework')} items={report.caseSpecificFeedback.frameworkUsed} />
+        <FeedbackList title={t(uiLanguage, 'objectivesMet')} items={report.caseSpecificFeedback.learningObjectivesMet} />
+        <FeedbackList title={t(uiLanguage, 'objectivesNotMet')} items={report.caseSpecificFeedback.learningObjectivesNotMet} />
+        <FeedbackList title={t(uiLanguage, 'practiceGoals')} items={report.suggestedPracticeGoals} />
       </div>
-      {report.hkPcfAssessment && <HkPcfAssessmentView assessment={report.hkPcfAssessment} detailed={detailed} uiLanguage={uiLanguage} />}
-      <TurningPointList items={report.processReview.turningPoints} detailed={detailed} uiLanguage={uiLanguage} />
-      <FeedbackList title={t(uiLanguage, 'effectiveMoments')} items={report.processReview.effectiveMoments} />
-      <FeedbackList title={t(uiLanguage, 'missedOpportunities')} items={report.processReview.missedOpportunities} />
-      <FeedbackList title={t(uiLanguage, 'caseFramework')} items={report.caseSpecificFeedback.frameworkUsed} />
-      <FeedbackList title={t(uiLanguage, 'objectivesMet')} items={report.caseSpecificFeedback.learningObjectivesMet} />
-      <FeedbackList title={t(uiLanguage, 'objectivesNotMet')} items={report.caseSpecificFeedback.learningObjectivesNotMet} />
-      <FeedbackList title={t(uiLanguage, 'practiceGoals')} items={report.suggestedPracticeGoals} />
     </div>
   );
 }
@@ -770,6 +784,10 @@ function HkPcfAssessmentView({
   detailed: boolean;
   uiLanguage: ResponseLanguage;
 }) {
+  const observedScores = Object.fromEntries(
+    Object.entries(assessment.scores).filter(([domain]) =>
+      !assessment.domainAssessments || assessment.domainAssessments[domain as keyof typeof assessment.domainAssessments]?.status === 'observed'),
+  );
   return (
     <div className="hkPcfBlock">
       <div className="reportBlock">
@@ -777,10 +795,19 @@ function HkPcfAssessmentView({
         <p>{assessment.frameworkLabel}</p>
         <p className="disclaimerText">{assessment.disclaimer}</p>
       </div>
-      <RadarScoreChart labels={hkPcfLabelsFor(uiLanguage)} scores={assessment.scores} title={t(uiLanguage, 'hkPcfRadar')} />
-      <div className="scoreGrid">
+      <RadarScoreChart labels={hkPcfLabelsFor(uiLanguage)} scores={observedScores} title={t(uiLanguage, 'hkPcfRadar')} />
+      {Object.keys(observedScores).length < 3 && <p className="insufficientEvidenceNote">
+        {uiLanguage === 'english' ? 'There is not enough observed evidence to draw a meaningful radar chart.' : '目前可觀察證據不足，暫不繪製完整雷達圖。'}
+      </p>}
+      <div className="domainAssessmentGrid">
         {Object.entries(assessment.scores).map(([label, value]) => (
-          <Metric key={label} label={hkPcfLabel(label, uiLanguage)} value={value} max={10} />
+          <DomainAssessmentCard
+            assessment={assessment.domainAssessments?.[label as keyof typeof assessment.domainAssessments]}
+            key={label}
+            label={hkPcfLabel(label, uiLanguage)}
+            score={value}
+            uiLanguage={uiLanguage}
+          />
         ))}
       </div>
       <FeedbackList title={t(uiLanguage, 'strengthEvidence')} items={assessment.evidence.strengths} />
@@ -1003,6 +1030,40 @@ function shortRadarLabel(label: string) {
     .replace('資料收集與評估', '資料評估')
     .replace('自決與知情選擇', '自決選擇')
     .replace('介入計劃與轉介', '計劃轉介');
+}
+
+function DomainAssessmentCard({
+  label,
+  score,
+  assessment,
+  uiLanguage,
+}: {
+  label: string;
+  score: number;
+  assessment?: { status: 'observed' | 'insufficient_evidence' | 'not_observed'; confidence: number; evidenceTurnIds: string[] };
+  uiLanguage: ResponseLanguage;
+}) {
+  const status = assessment?.status ?? 'observed';
+  const statusLabel = {
+    observed: uiLanguage === 'english' ? 'Observed' : '已觀察',
+    insufficient_evidence: uiLanguage === 'english' ? 'Insufficient evidence' : '資料不足',
+    not_observed: uiLanguage === 'english' ? 'Not observed' : '未觀察到',
+  }[status];
+  return (
+    <article className={`domainAssessmentCard ${status}`}>
+      <div>
+        <strong>{label}</strong>
+        <span>{statusLabel}</span>
+      </div>
+      {status === 'observed' ? <b>{score.toFixed(1)}</b> : <b aria-label={statusLabel}>—</b>}
+      {assessment ? (
+        <p>
+          {uiLanguage === 'english' ? 'Confidence' : '信心度'} {Math.round(assessment.confidence * 100)}%
+          {assessment.evidenceTurnIds.length ? ` · ${assessment.evidenceTurnIds.join(', ')}` : ''}
+        </p>
+      ) : null}
+    </article>
+  );
 }
 
 function Metric({ label, value, max }: { label: string; value: number; max: number }) {
