@@ -3,6 +3,7 @@ import { ArrowLeft, Database, Mic2, Network, Settings2, UserRoundCog } from 'luc
 import { avatarAssets } from '../lib/avatarConfig';
 import { ResponseLanguage } from '../lib/interviewTypes';
 import { CasePanel, InstructorTab } from './CasePanel';
+import { AvatarExpressionLab } from './AvatarExpressionLab';
 
 type InstructorConsoleProps = Omit<ComponentProps<typeof CasePanel>, 'viewMode' | 'instructorTab'> & {
   avatarAssetId: string;
@@ -70,6 +71,7 @@ export function InstructorConsole({
       </nav>
 
       <section className="instructorContent">
+        {activeTab === 'avatar' && <AvatarExpressionLab asset={avatarAssets.find((asset) => asset.id === avatarAssetId) ?? avatarAssets[0]} language={uiLanguage} />}
         <CasePanel
           {...casePanelProps}
           uiLanguage={uiLanguage as ResponseLanguage}

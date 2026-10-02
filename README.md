@@ -6,6 +6,12 @@ This project is a teaching and research prototype. It is not a diagnostic tool, 
 
 ## 中文说明
 
+### Avatar 表情能力检查与校准
+
+督导工作台的 **Avatar 与语音 → 表情校准** 提供无声的组合表情预览，不调用模型或语音 API。运行时检测实际形变并合并重复代理：John Do 的 52 个名称实际对应 38 个有效名称、18 组独立形变，不再把名称数量视为完整 ARKit 能力。Streamoji 保留多 mesh 表情；Haru 保留 VRM preset fallback。说话时口型独立控制嘴部，眉眼情绪保留。
+
+`npm run avatar:expression:audit` 生成本地能力报告；`npm run avatar:expression:runtime:test` 验证组合控制和结束归零。原模型不改写，视觉自然度仍需人工确认。完整流程及英文说明见 [Avatar expression calibration](docs/avatar-expression-calibration.md)。
+
 ### 连续语音与纯台词输出
 
 服务对象文字和 TTS 只使用通过检查的口语台词。动作旁白进入现有一次 LLM repair；仍不合格则返回可重试错误，不写入服务对象回复或推进个案。

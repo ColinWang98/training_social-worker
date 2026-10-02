@@ -46,6 +46,7 @@ declare global {
 }
 
 export type AvatarBlendshapeDebug = {
+  capabilities?: import('./lib/morphExpressionController').ExpressionCapabilities;
   modelPath: string;
   arkitAvailable: boolean;
   arkitTargetCount: number;
@@ -1084,6 +1085,7 @@ export default function App() {
           <div className="avatarIdentity"><div><span>{responseLanguage === 'english' ? 'Service user' : '服務對象'}</span><strong>{caseProfile.client.displayName}</strong></div><span>{observableLabel(responseLanguage, latestClientResponse?.avatarDirective?.affect ?? caseProfile.avatarBaseline.baselineMood)}</span></div>
           <Suspense fallback={<div className="avatarLoading"><div className="loadingSpinner" /><span>{responseLanguage === 'english' ? 'Loading avatar…' : '正在載入 Avatar…'}</span></div>}>
             <VrmStage
+              debugEnabled={authSession.role === 'instructor'}
               avatarPath={selectedAvatar.modelPath}
               avatarFallbackPaths={selectedAvatar.fallbackPaths}
               avatarLabel={selectedAvatar.displayName}

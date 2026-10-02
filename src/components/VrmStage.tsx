@@ -12,6 +12,7 @@ import {
   ArkitBlendshapeName,
   ArkitBlendshapeWeights,
   AvatarLipSyncProfile,
+  avatarAssets,
   ExpressionWeights,
 } from '../lib/avatarConfig';
 import {
@@ -31,6 +32,7 @@ import {
   MotionCue,
 } from '../lib/interviewTypes';
 import { createMixamoOverlayController } from '../lib/mixamoSeatedOverlay';
+import { composeFacialWeights, createMorphTargetExpressionController, isArkitName, isMouthArkitName } from '../lib/morphExpressionController';
 import {
   compileSeatedMotionScript,
   sampleSeatedMotionProgram,
@@ -63,6 +65,7 @@ type AvatarClipManifest = {
 const ENABLE_SEATED_BONE_RUNTIME = true;
 
 type VrmStageProps = {
+  debugEnabled?: boolean;
   avatarPath: string;
   avatarFallbackPaths?: string[];
   avatarLabel?: string;
@@ -99,6 +102,7 @@ type VrmStageProps = {
 };
 
 export function VrmStage({
+  debugEnabled = false,
   avatarPath,
   avatarFallbackPaths,
   avatarLabel,
@@ -389,16 +393,16 @@ export function VrmStage({
               arkitControllerRef.current = null;
             }
 
-            const arkitAvailable = (arkitControllerRef.current?.arkitTargetCount ?? 0) >= 52;
+            const arkitAvailable = Boolean(arkitControllerRef.current?.ownsEmotion);
             setStageNotice('');
             const warningSuffix = postLoadWarnings.length ? ` (${postLoadWarnings.join('; ')})` : '';
             onStatusChange({
               avatarLoaded: true,
               vrmaLoaded: false,
               message: arkitAvailable
-                ? `Loaded ${avatarLabel ?? modelPath} as GLB with seated motion adapter and ARKit 52 blendshape targets.${warningSuffix}`
+                ? `Loaded ${avatarLabel ?? modelPath} with capability-checked facial expressions.${warningSuffix}`
                 : `Loaded ${avatarLabel ?? modelPath} as GLB with seated motion adapter; ARKit blendshapes unavailable.${warningSuffix}`,
-              blendshapeDebug: arkitControllerRef.current
+              blendshapeDebug: debugEnabled && arkitControllerRef.current
                 ? arkitDebugSnapshot(
                   modelPath,
                   arkitControllerRef.current,
@@ -476,16 +480,16 @@ export function VrmStage({
             postLoadWarnings.push(`ARKit controller skipped: ${error instanceof Error ? error.message : String(error)}`);
             arkitControllerRef.current = null;
           }
-          const arkitAvailable = (arkitControllerRef.current?.arkitTargetCount ?? 0) >= 52;
+          const arkitAvailable = Boolean(arkitControllerRef.current?.ownsEmotion);
           setStageNotice('');
           const warningSuffix = postLoadWarnings.length ? ` (${postLoadWarnings.join('; ')})` : '';
           onStatusChange({
             avatarLoaded: true,
             vrmaLoaded: false,
             message: arkitAvailable
-              ? `Loaded ${avatarLabel ?? modelPath} with ARKit 52 blendshape targets.${warningSuffix}`
+              ? `Loaded ${avatarLabel ?? modelPath} with capability-checked facial expressions.${warningSuffix}`
               : `Loaded ${avatarLabel ?? modelPath} through @pixiv/three-vrm; ARKit blendshapes unavailable.${warningSuffix}`,
-            blendshapeDebug: arkitControllerRef.current
+            blendshapeDebug: debugEnabled && arkitControllerRef.current
               ? arkitDebugSnapshot(
                 modelPath,
                 arkitControllerRef.current,
@@ -532,6 +536,7 @@ export function VrmStage({
     const applyExpressions = (elapsed: number, reactionPulse: number, delta: number) => {
       const vrm = vrmRef.current;
       const manager = vrm?.expressionManager;
+      const arkitController = arkitControllerRef.current;
       let blinkStrength = 0;
 
       if (autoBlinkRef.current) {
@@ -548,6 +553,7 @@ export function VrmStage({
         const expressionNames = new Set([...Object.keys(weights), ...Object.keys(current)]);
         manager.resetValues();
         expressionNames.forEach((name) => {
+          if (arkitController?.ownsEmotion) return;
           const baseTarget = weights[name as keyof ExpressionWeights] ?? 0;
           const target = clampExpression(baseTarget * (1 + reactionPulse * 0.35));
           const previous = clampExpression(current[name as keyof ExpressionWeights] ?? 0);
@@ -560,7 +566,7 @@ export function VrmStage({
           }
         });
 
-        if (blinkStrength > 0) {
+        if (blinkStrength > 0 && !arkitController?.ownsBlink) {
           setVrmExpressionValue(manager, 'blink', Math.max(getVrmExpressionValue(manager, 'blink'), blinkStrength));
         }
 
@@ -572,14 +578,13 @@ export function VrmStage({
           delta,
           mouthTarget > currentMouthRef.current ? 0.055 : 0.14,
         );
-        if (currentMouthRef.current > 0.025) {
+        if (currentMouthRef.current > 0.025 && !arkitController?.ownsViseme) {
           setVrmExpressionValue(manager, 'aa', Math.max(getVrmExpressionValue(manager, 'aa'), currentMouthRef.current));
         }
-
-        manager.update();
       }
 
-      const arkitController = arkitControllerRef.current;
+      // VRM updates its original bindings first; the calibrated morph writer owns aliases last.
+      vrm?.update(delta);
       if (arkitController) {
         const playback = visemePlaybackRef.current;
         const profile = expressionProfileRef.current ?? 'neutral';
@@ -618,24 +623,21 @@ export function VrmStage({
             }
             : {};
         const motionOverlay = motionExpressionOverlayRef.current;
-        const lipProfile = lipSyncProfileRef.current;
+        const lipProfile = avatarAssets.find((asset) => asset.modelPath === arkitController.modelPath)?.lipSyncProfile
+          ?? lipSyncProfileRef.current;
         const speaking = playback.active && timeline.length > 0;
         const mouthPolicy = activeExpressionPlan?.mouthPolicy ?? 'viseme_priority';
-        const arkitWeights = mergeArkitWeights(
-          suppressEmotionMouthWeights(baselineWeights, speaking, lipProfile, mouthPolicy),
-          suppressEmotionMouthWeights(profileWeights, speaking, lipProfile, mouthPolicy),
-          suppressEmotionMouthWeights(motionOverlay.weights, speaking, lipProfile, mouthPolicy),
-          applyLipSyncProfile(viseme.weights, lipProfile),
-          blink,
-        );
-        arkitController.apply(arkitWeights, delta);
-        if (elapsed - lastArkitDebugAtRef.current > 1.5) {
+        const emotionWeights = mergeArkitWeights(baselineWeights, profileWeights, motionOverlay.weights);
+        const arkitWeights = composeFacialWeights(emotionWeights,
+          applyLipSyncProfile(viseme.weights, lipProfile), blink, speaking);
+        arkitController.apply(arkitWeights, delta, speaking);
+        if (debugEnabled && elapsed - lastArkitDebugAtRef.current > 1.5) {
           lastArkitDebugAtRef.current = elapsed;
           onStatusChange({
             avatarLoaded: true,
             vrmaLoaded: Boolean(policyActionActiveRef.current || manualVrmaActiveRef.current),
-            message: arkitController.arkitTargetCount >= 52
-              ? `Loaded ${avatarLabel ?? arkitController.modelPath} with ARKit 52 blendshape targets.`
+            message: arkitController.capabilities.effectiveTargets > 0
+              ? `Loaded ${avatarLabel ?? arkitController.modelPath}: ${arkitController.capabilities.effectiveTargets} effective facial targets.`
               : `Loaded ${avatarLabel ?? arkitController.modelPath}; ARKit blendshapes unavailable.`,
             blendshapeDebug: arkitDebugSnapshot(
               arkitController.modelPath,
@@ -890,7 +892,6 @@ export function VrmStage({
         }
       }
       applyExpressions(elapsed, expressionReactionPulse, delta);
-      vrmRef.current?.update(delta);
       try {
         renderer.render(scene, camera);
       } catch (error) {
@@ -920,7 +921,7 @@ export function VrmStage({
           vrmBounds,
           stagePath: avatarPath,
         });
-        if (motionRuntimeDebug) {
+        if (debugEnabled && motionRuntimeDebug) {
           onStatusChange({
             avatarLoaded: Boolean(avatarSceneRef.current),
             vrmaLoaded: Boolean(policyActionActiveRef.current || manualVrmaActiveRef.current),
@@ -951,7 +952,7 @@ export function VrmStage({
       glbBoneRuntimeRef.current = null;
       mixerRef.current = null;
     };
-  }, [avatarFallbackKey, avatarFallbackPaths, avatarLabel, avatarPath, onStatusChange]);
+  }, [avatarFallbackKey, avatarFallbackPaths, avatarLabel, avatarPath, onStatusChange, debugEnabled]);
 
   useEffect(() => {
     if (!vrmaFile || !vrmRef.current) return;
@@ -2190,65 +2191,6 @@ function getVrmExpressionValue(manager: VrmExpressionManager, name: string) {
   }, 0);
 }
 
-function createMorphTargetExpressionController(scene: THREE.Object3D, modelPath: string) {
-  const targets: Array<{
-    mesh: THREE.Mesh;
-    dictionary: Record<string, number>;
-    influences: number[];
-    enabledNames: Set<string>;
-  }> = [];
-  const current: Record<string, number> = {};
-  const arkitNames = new Set<string>();
-  let drivenMouthTargetCount = 0;
-
-  scene.traverse((object) => {
-    const mesh = object as THREE.Mesh & {
-      morphTargetDictionary?: Record<string, number>;
-      morphTargetInfluences?: number[];
-    };
-    if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
-    const dictionary = mesh.morphTargetDictionary;
-    const enabledNames = new Set<string>();
-    Object.keys(dictionary).forEach((name) => {
-      if (!isArkitName(name)) return;
-      arkitNames.add(name);
-      const enabled = !isMouthArkitName(name) || morphTargetHasPositionDelta(mesh, dictionary[name]);
-      if (enabled) {
-        enabledNames.add(name);
-        if (isMouthArkitName(name)) drivenMouthTargetCount += 1;
-      }
-    });
-    targets.push({
-      mesh,
-      dictionary,
-      influences: mesh.morphTargetInfluences,
-      enabledNames,
-    });
-  });
-
-  return {
-    modelPath,
-    arkitTargetCount: arkitNames.size,
-    drivenMouthTargetCount,
-    apply(nextWeights: ArkitBlendshapeWeights, delta: number) {
-      const names = new Set([...Object.keys(current), ...Object.keys(nextWeights)]);
-      names.forEach((name) => {
-        if (!isArkitName(name)) return;
-        const target = clampExpression(nextWeights[name as ArkitBlendshapeName] ?? 0);
-        const previous = clampExpression(current[name] ?? 0);
-        const next = dampValue(previous, target, delta, expressionTimeConstant(name, target > previous));
-        current[name] = next;
-        targets.forEach(({ dictionary, influences, enabledNames }) => {
-          if (!enabledNames.has(name)) return;
-          const index = dictionary[name];
-          if (typeof index === 'number') influences[index] = next;
-        });
-        if (next <= 0.002 && target === 0) delete current[name];
-      });
-    },
-  };
-}
-
 function mergeArkitWeights(...layers: ArkitBlendshapeWeights[]): ArkitBlendshapeWeights {
   const merged: Record<string, number> = {};
   layers.forEach((layer) => {
@@ -2257,27 +2199,6 @@ function mergeArkitWeights(...layers: ArkitBlendshapeWeights[]): ArkitBlendshape
     });
   });
   return merged as ArkitBlendshapeWeights;
-}
-
-function suppressEmotionMouthWeights(
-  weights: ArkitBlendshapeWeights,
-  speaking: boolean,
-  lipProfile: AvatarLipSyncProfile,
-  mouthPolicy: AvatarExpressionPlan['mouthPolicy'],
-): ArkitBlendshapeWeights {
-  if (!speaking) return weights;
-  const policyMultiplier = mouthPolicy === 'risk_suppressed'
-    ? 0.12
-    : mouthPolicy === 'emotion_mouth_allowed'
-      ? 0.68
-      : lipProfile.emotionMouthSuppressionWhileSpeaking;
-  const next: ArkitBlendshapeWeights = {};
-  Object.entries(weights).forEach(([name, value]) => {
-    next[name as ArkitBlendshapeName] = isMouthArkitName(name)
-      ? clampExpression((value ?? 0) * policyMultiplier)
-      : clampExpression(value ?? 0);
-  });
-  return next;
 }
 
 function expressionPlanWeights(
@@ -2450,7 +2371,8 @@ function arkitDebugSnapshot(
 ): AvatarBlendshapeDebug {
   return {
     modelPath,
-    arkitAvailable: controller.arkitTargetCount >= 52,
+    arkitAvailable: controller.ownsEmotion && controller.ownsViseme,
+    capabilities: controller.capabilities,
     arkitTargetCount: controller.arkitTargetCount,
     activeExpressionProfile,
     activeViseme,
@@ -2473,28 +2395,6 @@ function maxWeight(weights: ArkitBlendshapeWeights, pattern: RegExp) {
     (max, [name, value]) => (pattern.test(name) ? Math.max(max, clampExpression(value)) : max),
     0,
   );
-}
-
-function isArkitName(name: string): name is ArkitBlendshapeName {
-  return ARKIT_NAME_SET.has(name as ArkitBlendshapeName);
-}
-
-function isMouthArkitName(name: string) {
-  return /^(jaw|mouth|tongue)/.test(name);
-}
-
-function morphTargetHasPositionDelta(mesh: THREE.Mesh, index: number) {
-  const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
-  const attribute = geometry?.morphAttributes?.position?.[index];
-  if (!attribute || typeof attribute.count !== 'number' || attribute.count <= 0) return false;
-  const step = Math.max(1, Math.floor(attribute.count / 96));
-  for (let i = 0; i < attribute.count; i += step) {
-    if (Math.abs(attribute.getX(i)) + Math.abs(attribute.getY(i)) + Math.abs(attribute.getZ(i)) > 1e-6) {
-      return true;
-    }
-  }
-  const last = attribute.count - 1;
-  return Math.abs(attribute.getX(last)) + Math.abs(attribute.getY(last)) + Math.abs(attribute.getZ(last)) > 1e-6;
 }
 
 function dampValue(current: number, target: number, delta: number, timeConstant: number) {
@@ -2529,61 +2429,6 @@ function expressionTimeConstant(name: string, attack: boolean) {
   if (name === 'neutral') return attack ? 0.2 : 0.24;
   return attack ? 0.12 : 0.28;
 }
-
-const ARKIT_NAME_SET = new Set<ArkitBlendshapeName>([
-  'browDownLeft',
-  'browDownRight',
-  'browInnerUp',
-  'browOuterUpLeft',
-  'browOuterUpRight',
-  'cheekPuff',
-  'cheekSquintLeft',
-  'cheekSquintRight',
-  'eyeBlinkLeft',
-  'eyeBlinkRight',
-  'eyeLookDownLeft',
-  'eyeLookDownRight',
-  'eyeLookInLeft',
-  'eyeLookInRight',
-  'eyeLookOutLeft',
-  'eyeLookOutRight',
-  'eyeLookUpLeft',
-  'eyeLookUpRight',
-  'eyeSquintLeft',
-  'eyeSquintRight',
-  'eyeWideLeft',
-  'eyeWideRight',
-  'jawForward',
-  'jawLeft',
-  'jawOpen',
-  'jawRight',
-  'mouthClose',
-  'mouthDimpleLeft',
-  'mouthDimpleRight',
-  'mouthFrownLeft',
-  'mouthFrownRight',
-  'mouthFunnel',
-  'mouthLeft',
-  'mouthLowerDownLeft',
-  'mouthLowerDownRight',
-  'mouthPressLeft',
-  'mouthPressRight',
-  'mouthPucker',
-  'mouthRight',
-  'mouthRollLower',
-  'mouthRollUpper',
-  'mouthShrugLower',
-  'mouthShrugUpper',
-  'mouthSmileLeft',
-  'mouthSmileRight',
-  'mouthStretchLeft',
-  'mouthStretchRight',
-  'mouthUpperUpLeft',
-  'mouthUpperUpRight',
-  'noseSneerLeft',
-  'noseSneerRight',
-  'tongueOut',
-]);
 
 function moodCueForBaseline(mood?: AffectLabel): MotionCue | undefined {
   if (mood === 'defensive' || mood === 'irritated') return 'lean_back';

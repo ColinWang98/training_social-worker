@@ -528,6 +528,12 @@ export function CasePanel({
                 <div className="avatarDirectiveGrid">
                   <DirectiveItem label="ARKit 模型" value={avatarBlendshapeDebug.arkitAvailable ? 'on' : 'fallback'} />
                   <DirectiveItem label="ARKit targets" value={`${avatarBlendshapeDebug.arkitTargetCount}`} />
+                  {avatarBlendshapeDebug.capabilities && <>
+                    <DirectiveItem label={uiLanguage === 'english' ? 'Effective targets' : '有效形變名稱'} value={String(avatarBlendshapeDebug.capabilities.effectiveTargets)} />
+                    <DirectiveItem label={uiLanguage === 'english' ? 'Independent groups (per mesh)' : '獨立形變組（各 mesh）'} value={String(avatarBlendshapeDebug.capabilities.independentGroups)} />
+                    <DirectiveItem label={uiLanguage === 'english' ? 'Unsupported' : '不支援'} value={avatarBlendshapeDebug.capabilities.unsupportedNames.join(', ') || 'none'} />
+                    <DirectiveItem label={uiLanguage === 'english' ? 'Shared shapes' : '共用形變'} value={avatarBlendshapeDebug.capabilities.aliasedGroups.map((group) => group.join(' = ')).join('; ') || 'none'} />
+                  </>}
                   <DirectiveItem label="Mouth targets" value={`${avatarBlendshapeDebug.drivenMouthTargetCount}`} />
                   <DirectiveItem label="模型" value={avatarBlendshapeDebug.modelPath} />
                   <DirectiveItem label="表情 Profile" value={avatarBlendshapeDebug.activeExpressionProfile} />

@@ -2354,6 +2354,19 @@ button {
   font-size: 0.72rem;
 }
 
+.expressionLab { margin-bottom: 20px; border-bottom: 1px solid #dce2e8; padding-bottom: 20px; }
+.expressionLabToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; }
+.expressionLabToolbar h2 { font-size: 1rem; margin: 0 auto 0 0; }
+.expressionLabToolbar label { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; }
+.expressionLabToolbar input[type="range"] { width: 130px; }
+.expressionLabBody { display: grid; grid-template-columns: minmax(300px, 42%) minmax(0, 1fr); gap: 20px; }
+.expressionLabStage { height: 440px; min-width: 0; overflow: hidden; position: relative; border-radius: 6px; }
+.expressionLabStage .stage { height: 100%; box-shadow: none; }
+.expressionLabReadout { min-width: 0; max-height: 440px; overflow: auto; font-size: 0.8rem; }
+.expressionLabReadout progress { display: block; width: 100%; margin: 12px 0; }
+.expressionLabReadout dt { font-weight: 600; color: #52616c; margin-top: 12px; }
+.expressionLabReadout dd { margin: 4px 0 0; overflow-wrap: anywhere; line-height: 1.5; }
+
 @media (min-width: 1600px) {
   .trainingMain {
     grid-template-columns: minmax(560px, 41%) minmax(680px, 1fr);
