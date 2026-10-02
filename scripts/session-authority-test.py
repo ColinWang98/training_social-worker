@@ -5,6 +5,8 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,9 @@ class SQLiteStore:
     def __init__(self, path: Path):
         self.db_path = path
         with self._connect() as db:
+            db.execute("""CREATE TABLE simulator_sessions (
+                session_id TEXT PRIMARY KEY, case_id TEXT, case_profile_json TEXT,
+                created_at TEXT, updated_at TEXT)""")
             db.execute("""CREATE TABLE simulator_events (
                 session_id TEXT, agent_trace_id TEXT, event_type TEXT,
                 payload_json TEXT, created_at TEXT)""")
@@ -77,6 +82,111 @@ class SessionAuthorityTests(unittest.TestCase):
                                   {"caseProfile": self.case, "continuity": {}, "history": []},
                                   {"clientText": "discard", "agentTraceId": "trace-cancel"}, {})
         self.assertEqual(self.authority.read(sid, "owner-a")["stateVersion"], 0)
+
+    def commit_turn(self, tid, token, version):
+        case = {"id": "case-one", "psychologicalState": {"clientOpenness": 2.2}}
+        return self.authority.commit(self.session["sessionId"], "owner-a", tid, token, version,
+            {"caseProfile": case, "continuity": {"turns": version + 1}, "history": [{"speaker": "student", "text": tid}]},
+            {"clientText": "嗯。", "agentTraceId": "trace-" + tid}, {})
+
+    def test_competing_text_and_voice_reservations_have_one_winner(self):
+        barrier = Barrier(2)
+        def reserve(tid):
+            barrier.wait()
+            try:
+                return self.authority.reserve(self.session["sessionId"], "owner-a", tid, 0)[1]
+            except SessionError as exc:
+                return exc.code
+        with ThreadPoolExecutor(2) as executor:
+            results = list(executor.map(reserve, ["text-1", "voice-1"]))
+        self.assertEqual(results.count("session_busy"), 1)
+
+    def test_twenty_turns_survive_restart_without_reapplying_delta(self):
+        sid = self.session["sessionId"]
+        for version in range(20):
+            tid = "turn-" + str(version)
+            _, token, _ = self.authority.reserve(sid, "owner-a", tid, version)
+            response = self.commit_turn(tid, token, version)
+            self.authority = SessionAuthority(self.store)
+            snapshot, token, cached = self.authority.reserve(sid, "owner-a", tid, version)
+            self.assertIsNone(token)
+            self.assertEqual(cached, response)
+            self.assertEqual(snapshot["caseProfile"]["psychologicalState"]["clientOpenness"], 2.2)
+        self.assertEqual(snapshot["stateVersion"], 20)
+        with self.store._connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM simulator_events").fetchone()[0], 20)
+            stored = json.loads(db.execute("SELECT case_profile_json FROM simulator_sessions").fetchone()[0])
+            self.assertEqual(stored, snapshot["caseProfile"])
+
+    def test_reset_cancels_pending_work_and_rejects_late_commit(self):
+        sid = self.session["sessionId"]
+        _, token, _ = self.authority.reserve(sid, "owner-a", "late", 0)
+        self.authority.close(sid, "owner-a", cancel_pending=True)
+        with self.assertRaises(SessionError):
+            self.commit_turn("late", token, 0)
+        fresh = self.authority.start(self.case, "owner-a")
+        self.assertEqual(fresh["stateVersion"], 0)
+        self.assertNotEqual(fresh["sessionId"], sid)
+
+    def test_review_freezes_turns_and_failed_review_can_retry(self):
+        sid = self.session["sessionId"]
+        _, token, _ = self.authority.reserve(sid, "owner-a", "turn", 0)
+        self.commit_turn("turn", token, 0)
+        record, review_token, cached = self.authority.reserve_review(sid, "owner-a")
+        self.assertIsNone(cached)
+        with self.assertRaises(SessionError):
+            self.authority.reserve(sid, "owner-a", "too-late", 1)
+        with self.assertRaises(SessionError):
+            self.authority.reserve_review(sid, "owner-a")
+        self.authority.fail_review(sid, review_token)
+        self.assertEqual(self.authority.read(sid, "owner-a")["status"], "active")
+        record, review_token, _ = self.authority.reserve_review(sid, "owner-a")
+        report = {"overallSummary": "Report", "sessionId": sid}
+        self.authority.commit_review(sid, "owner-a", review_token, record["stateVersion"], report, {})
+        self.assertEqual(self.authority.read(sid, "owner-a")["status"], "closed")
+        self.assertEqual(self.authority.reserve_review(sid, "owner-a")[2], report)
+        with self.store._connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM simulator_events WHERE event_type='post_session_supervisor_report'").fetchone()[0], 1)
+
+    def test_cancel_commit_race_has_one_durable_outcome(self):
+        sid = self.session["sessionId"]
+        _, token, _ = self.authority.reserve(sid, "owner-a", "race", 0)
+        barrier = Barrier(2)
+        def cancel():
+            barrier.wait()
+            self.authority.cancel(sid, "owner-a", "race")
+        def commit():
+            barrier.wait()
+            try:
+                self.commit_turn("race", token, 0)
+                return True
+            except SessionError:
+                return False
+        with ThreadPoolExecutor(2) as executor:
+            cancelled = executor.submit(cancel)
+            committed = executor.submit(commit)
+            cancelled.result()
+            success = committed.result()
+        with self.store._connect() as db:
+            count = db.execute("SELECT COUNT(*) FROM simulator_events").fetchone()[0]
+        self.assertEqual(count, int(success))
+        self.assertEqual(self.authority.read(sid, "owner-a")["stateVersion"], int(success))
+
+    def test_expired_review_recovers_after_restart_and_cannot_commit(self):
+        sid = self.session["sessionId"]
+        _, token, _ = self.authority.reserve(sid, "owner-a", "first", 0)
+        self.commit_turn("first", token, 0)
+        _, review_token, _ = self.authority.reserve_review(sid, "owner-a")
+        with self.store._connect() as db:
+            db.execute("UPDATE training_reviews SET deadline=0 WHERE session_id=?", (sid,))
+        self.authority = SessionAuthority(self.store)
+        self.assertEqual(self.authority.read(sid, "owner-a")["status"], "active")
+        with self.assertRaises(SessionError):
+            self.authority.commit_review(sid, "owner-a", review_token, 1, {}, {})
+        _, next_token, _ = self.authority.reserve(sid, "owner-a", "next", 1)
+        self.commit_turn("next", next_token, 1)
+        self.authority.fail_review(sid, review_token)
+        self.assertEqual(self.authority.read(sid, "owner-a")["stateVersion"], 2)
 
 
 class ProjectionTests(unittest.TestCase):

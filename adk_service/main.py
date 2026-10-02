@@ -51,7 +51,13 @@ def identity(connection):
 
 
 async def trusted_payload(request):
-    return {**await request.json(), **identity(request)}
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeError) as exc:
+        raise HTTPException(status_code=400, detail='invalid_json') from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail='invalid_payload')
+    return {**payload, **identity(request)}
 
 
 @app.get('/api/cases')
@@ -77,7 +83,9 @@ async def health() -> dict[str, Any]:
 
 
 @app.post("/api/shutdown")
-async def shutdown_service() -> dict[str, Any]:
+async def shutdown_service(request: Request) -> dict[str, Any]:
+    if identity(request)['_role'] != 'instructor':
+        raise HTTPException(status_code=403, detail='Instructor access required.')
     threading.Timer(0.25, lambda: os._exit(0)).start()
     return {"ok": True, "message": "ADK service shutting down."}
 
@@ -470,6 +478,14 @@ async def voice_stream(websocket: WebSocket) -> None:
             state.get("ttsPayloads", {}).pop(response_id, None)
         return response_id
 
+    async def cancel_and_wait() -> str | None:
+        pending = response_task
+        response_id = cancel_active_response()
+        if pending:
+            with contextlib.suppress(asyncio.CancelledError):
+                await pending
+        return response_id
+
     def schedule_turn_processing(delay: float = 1.15, reason: str = "final") -> None:
         nonlocal turn_task
         cancel_turn_task()
@@ -670,12 +686,29 @@ async def voice_stream(websocket: WebSocket) -> None:
             except json.JSONDecodeError:
                 await send_event({"type": "error", "message": "Invalid voice event JSON.", "recoverable": True})
                 continue
+            if not isinstance(message, dict):
+                await send_event({'type': 'error', 'message': 'Invalid voice event payload.', 'recoverable': True})
+                continue
             message_type = message.get("type")
             if message_type in {"start", "session.update"}:
+                session = None
+                if hasattr(coordinator, 'authority'):
+                    try:
+                        session = coordinator.authority.read(message.get('sessionId'), identity(websocket)['_owner'])
+                        if session['status'] != 'active':
+                            raise SessionError('session_closed')
+                    except SessionError as exc:
+                        await send_event({'type': 'error', 'code': exc.code, 'message': exc.code, 'recoverable': False})
+                        await websocket.close(code=1008)
+                        break
+                state['queuedUtterances'] = []
+                cancel_turn_task()
+                await cancel_and_wait()
+                if proactive_restart_task:
+                    proactive_restart_task.cancel()
                 for active_tts_session in list(state.get("ttsSessions", {}).values()):
                     active_tts_session.stop()
-                if hasattr(coordinator, 'authority'):
-                    session = coordinator.authority.read(message.get('sessionId'), identity(websocket)['_owner'])
+                if session:
                     state['sessionId'] = session['sessionId']
                     state['caseProfile'] = session['caseProfile']
                     state['history'] = session['history']
@@ -775,13 +808,15 @@ async def voice_stream(websocket: WebSocket) -> None:
             elif message_type == "barge_in":
                 state["bargeInSeq"] = int(state.get("bargeInSeq") or 0) + 1
                 state["assistantSpeaking"] = False
-                previous_response_id = cancel_active_response()
-                if state.get("responseCommitted") and hasattr(coordinator, "record_voice_delivery"):
+                committed = state.get('responseCommitted')
+                previous_utterance_id = state.get('lastProcessedUtteranceId')
+                previous_response_id = await cancel_and_wait()
+                if committed and hasattr(coordinator, "record_voice_delivery"):
                     coordinator.record_voice_delivery(
                         state.get("sessionId"),
                         previous_response_id,
                         "interrupted",
-                        state.get("lastProcessedUtteranceId"),
+                        previous_utterance_id,
                     )
                 await send_event({
                     "type": "barge_in_ack",
@@ -790,19 +825,23 @@ async def voice_stream(websocket: WebSocket) -> None:
                     "deliveryStatus": "interrupted",
                 }, "response.cancelled")
             elif message_type == "cancel_avatar_speech":
+                if message.get('responseId') and message['responseId'] != state.get('activeResponseId'):
+                    continue
                 state["assistantSpeaking"] = False
-                previous_response_id = cancel_active_response()
-                if state.get("responseCommitted") and hasattr(coordinator, "record_voice_delivery"):
+                committed = state.get('responseCommitted')
+                previous_utterance_id = state.get('lastProcessedUtteranceId')
+                previous_response_id = await cancel_and_wait()
+                if committed and hasattr(coordinator, "record_voice_delivery"):
                     coordinator.record_voice_delivery(
                         state.get("sessionId"),
                         previous_response_id,
                         "interrupted",
-                        state.get("lastProcessedUtteranceId"),
+                        previous_utterance_id,
                     )
                 await send_event({"type": "avatar_speech_cancelled", "responseId": previous_response_id, "deliveryStatus": "interrupted"}, "response.cancelled")
             elif message_type == "playback_completed":
                 response_id = str(message.get("responseId") or state.get("activeResponseId") or "")
-                if response_id and response_id not in state["cancelledResponseIds"]:
+                if response_id and response_id == state.get('activeResponseId') and response_id not in state["cancelledResponseIds"]:
                     state["assistantSpeaking"] = False
                     state.get("ttsPayloads", {}).pop(response_id, None)
                     if hasattr(coordinator, "record_voice_delivery"):
@@ -813,7 +852,8 @@ async def voice_stream(websocket: WebSocket) -> None:
                             state.get("lastProcessedUtteranceId"),
                         )
             elif message_type == "cancel":
-                cancel_active_response()
+                state['queuedUtterances'] = []
+                await cancel_and_wait()
                 if speech_session:
                     speech_session.stop()
                     speech_session = None
@@ -822,6 +862,7 @@ async def voice_stream(websocket: WebSocket) -> None:
         pass
     finally:
         pending_response_task = response_task
+        state['queuedUtterances'] = []
         cancel_turn_task()
         cancel_active_response()
         if pending_response_task:

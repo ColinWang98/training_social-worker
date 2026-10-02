@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
+import copy
 import importlib.util
 import json
 import sys
@@ -20,6 +22,11 @@ def load_case(case_type: str) -> dict:
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description='Live ADK session smoke; invokes the configured paid model.')
+    parser.add_argument('--allow-paid', action='store_true', help='Explicitly authorize live provider calls.')
+    if not parser.parse_args().allow_paid:
+        print('SKIPPED: live ADK smoke requires --allow-paid. Use session:api:test for offline API checks.')
+        return
     if importlib.util.find_spec("fastapi") is None:
         print("fastapi not installed; testing coordinator runtime without HTTP app.")
 

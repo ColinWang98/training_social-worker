@@ -134,8 +134,13 @@ RHUBARB_TIMEOUT_MS=2500
 
 ### 中文常用检查
 
+以下检查不调用付费生成服务：
+
 ```bash
 npm run build
+npm run session:authority:test
+npm run session:api:test
+npm run auth:boundary:test
 npm run voice:machine:test
 npm run voice:audio:test
 npm run voice:stream:test
@@ -143,9 +148,13 @@ npm run voice:tts-stream:test
 npm run avatar:expression:test
 npm run avatar:motion:test
 npm run avatar:lip:test
-npm run adk:smoke
-npm run smoke:sessions
 ```
+
+`auth:boundary:test` 使用临时本机端口和假后端；结束后自动清理。`desktop:session:test` 使用已安装的 Chrome 和可选 Playwright（可通过 `PLAYWRIGHT_MODULE` 指定模块路径），验证启动重试、同轮重试、报告失败恢复、切换个案及三个桌面尺寸，不发送真实访谈。
+
+真实模型验收需单独授权：`npm run adk:smoke -- --allow-paid`；不加开关只显示跳过。`npm run smoke:sessions` 仍是收费完整访谈脚本，不属于离线检查，也不应自动进入部署流程。
+
+本轮修复与验收边界见 [可靠性验证记录](docs/reliability-validation.md)。
 
 ### 数据与隐私
 
@@ -407,13 +416,16 @@ Run checks:
 
 ```bash
 npm run build
+npm run session:authority:test
+npm run session:api:test
+npm run auth:boundary:test
 npm run voice:machine:test
 npm run voice:audio:test
 npm run voice:stream:test
 npm run voice:tts-stream:test
-npm run adk:smoke
-npm run smoke:sessions
 ```
+
+These checks use local fixtures/provider mocks. Optional `npm run desktop:session:test` needs Chrome and Playwright (`PLAYWRIGHT_MODULE` can point to an existing installation). Live ADK smoke requires explicit `npm run adk:smoke -- --allow-paid`; `smoke:sessions` also calls paid providers and must not run automatically during deployment. See the [validation record](docs/reliability-validation.md) for verified scope and remaining acceptance work.
 
 Corpus:
 

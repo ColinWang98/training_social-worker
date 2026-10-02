@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef } from 'react';
-import { Mic, MicOff, Send, ShieldAlert, Square } from 'lucide-react';
+import { Mic, MicOff, RotateCcw, Send, ShieldAlert, Square } from 'lucide-react';
 import { ClientResponse, InterviewTurn, ResponseLanguage } from '../lib/interviewTypes';
 import { t } from '../lib/i18n';
 import { VoiceStatus } from '../lib/voiceSessionMachine';
@@ -8,6 +8,8 @@ type InterviewPanelProps = {
   turns: InterviewTurn[];
   inputValue: string;
   isPending: boolean;
+  sessionReady: boolean;
+  sessionClosing: boolean;
   sessionEnded: boolean;
   errorMessage: string | null;
   latestClientResponse: ClientResponse | null;
@@ -21,6 +23,7 @@ type InterviewPanelProps = {
   onStopUtterance: () => void;
   onStopVoice: () => void;
   onSubmit: () => void;
+  onRetrySession: () => void;
   uiLanguage: ResponseLanguage;
 };
 
@@ -28,6 +31,8 @@ export function InterviewPanel({
   turns,
   inputValue,
   isPending,
+  sessionReady,
+  sessionClosing,
   sessionEnded,
   errorMessage,
   latestClientResponse,
@@ -41,9 +46,11 @@ export function InterviewPanel({
   onStopUtterance,
   onStopVoice,
   onSubmit,
+  onRetrySession,
   uiLanguage,
 }: InterviewPanelProps) {
-  const hasRisk = Boolean(latestClientResponse?.riskSignals.length);
+  const hasRisk = Boolean(latestClientResponse?.safetyHint || latestClientResponse?.riskSignals.length);
+  const controlsDisabled = isPending || sessionEnded || sessionClosing || !sessionReady;
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -91,8 +98,15 @@ export function InterviewPanel({
         <div ref={chatEndRef} />
       </div>
 
-      {errorMessage && <p className="errorText">{errorMessage}</p>}
+      {errorMessage && <p className="errorText" role="alert">{errorMessage}</p>}
+      {!sessionReady && errorMessage && (
+        <button type="button" className="secondaryButton" onClick={onRetrySession}>
+          <RotateCcw size={16} />
+          {uiLanguage === 'english' ? 'Retry connection' : '重試連線'}
+        </button>
+      )}
       {voiceError && <p className="errorText">{voiceError}</p>}
+      {!sessionReady && !errorMessage && <p role="status">{uiLanguage === 'english' ? 'Preparing the interview...' : '正在準備訪談…'}</p>}
 
       <form className="messageComposer" onSubmit={handleSubmit}>
         <div className="voiceControls" aria-label={t(uiLanguage, 'voiceModeAria')}>
@@ -107,7 +121,7 @@ export function InterviewPanel({
           <div className="voiceButtons">
             {voiceEnabled ? (
               <>
-                <button type="button" className="secondaryButton" disabled={sessionEnded} onClick={onStopUtterance}>
+                <button type="button" className="secondaryButton" disabled={sessionEnded || sessionClosing} onClick={onStopUtterance}>
                   <Square size={15} />
                   {t(uiLanguage, 'stopUtterance')}
                 </button>
@@ -117,7 +131,7 @@ export function InterviewPanel({
                 </button>
               </>
             ) : (
-              <button type="button" className="secondaryButton" disabled={isPending || sessionEnded} onClick={onStartVoice}>
+              <button type="button" className="secondaryButton" disabled={controlsDisabled} onClick={onStartVoice}>
                 <Mic size={15} />
                 {voiceError ? (uiLanguage === 'english' ? 'Reconnect voice' : '重新連接語音') : t(uiLanguage, 'voiceMode')}
               </button>
@@ -126,15 +140,15 @@ export function InterviewPanel({
         </div>
         <textarea
           aria-label={t(uiLanguage, 'studentMessage')}
-          disabled={isPending || sessionEnded}
+          disabled={controlsDisabled}
           placeholder={sessionEnded ? t(uiLanguage, 'sessionEndedPlaceholder') : t(uiLanguage, 'messagePlaceholder')}
           rows={3}
           value={inputValue}
           onChange={(event) => onInputChange(event.target.value)}
         />
-        <button disabled={isPending || sessionEnded || !inputValue.trim()} type="submit">
-          <Send size={16} />
-          {sessionEnded ? t(uiLanguage, 'ended') : isPending ? t(uiLanguage, 'generating') : t(uiLanguage, 'send')}
+        <button disabled={controlsDisabled || !inputValue.trim()} type="submit">
+          {errorMessage ? <RotateCcw size={16} /> : <Send size={16} />}
+          {sessionEnded ? t(uiLanguage, 'ended') : sessionClosing ? t(uiLanguage, 'generatingReport') : isPending ? t(uiLanguage, 'generating') : errorMessage ? (uiLanguage === 'english' ? 'Retry' : '重試') : t(uiLanguage, 'send')}
         </button>
       </form>
     </section>

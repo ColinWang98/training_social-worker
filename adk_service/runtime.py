@@ -3008,8 +3008,9 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         return session_view(record, payload.get('_role', 'instructor'))
 
     def reset_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        resolve_case(payload)
         if payload.get('sessionId'):
-            self.authority.close(payload['sessionId'], payload.get('_owner', 'local-dev'))
+            self.authority.close(payload['sessionId'], payload.get('_owner', 'local-dev'), cancel_pending=True)
         return self.start_session({**payload, 'sessionId': None})
 
     def export_session(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3026,6 +3027,14 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         }
 
     async def interview_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload.get('studentText'), str) or not payload['studentText'].strip():
+            raise SessionError('student_text_required', 400)
+        for key in ('turnId', 'sessionId'):
+            if payload.get(key) is not None and (not isinstance(payload[key], str) or not payload[key]):
+                raise SessionError('invalid_' + key, 400)
+        expected = payload.get('expectedStateVersion')
+        if expected is not None and (type(expected) is not int or expected < 0):
+            raise SessionError('invalid_state_version', 400)
         owner = payload.get('_owner', 'local-dev')
         sid = payload.get('sessionId')
         if not sid:
@@ -3042,6 +3051,9 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             enriched.update(simulationMethod='social_work_default', retrievalOptions={'embeddingEnabled': False})
         try:
             return await asyncio.wait_for(self._generate_turn(enriched), timeout=150)
+        except asyncio.CancelledError:
+            self.authority.cancel(sid, owner, tid, token)
+            raise
         except BaseException:
             self.authority.fail(sid, tid, token)
             raise
@@ -3193,7 +3205,27 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
 
     async def final_review(self, payload: dict[str, Any]) -> dict[str, Any]:
         session_id = payload.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise SessionError('session_id_required', 400)
         record = self.authority.read(session_id, payload.get('_owner', 'local-dev'))
+        # Reports saved before review reservations were introduced remain readable.
+        if record['status'] == 'closed':
+            events = self.sessions.session_events(session_id)
+            existing = next((e.get('payload', {}).get('report') for e in reversed(events)
+                             if e.get('eventType', e.get('event_type')) == 'post_session_supervisor_report'), None)
+            if existing:
+                return existing
+        record, token, cached = self.authority.reserve_review(session_id, payload.get('_owner', 'local-dev'))
+        if cached is not None:
+            return cached
+        try:
+            return await asyncio.wait_for(self._generate_final_review(payload, record, token), timeout=150)
+        except BaseException:
+            self.authority.fail_review(session_id, token)
+            raise
+
+    async def _generate_final_review(self, payload, record, token):
+        session_id = record['sessionId']
         case_profile = record['caseProfile']
         history = record['history']
         if not isinstance(session_id, str) or not session_id:
@@ -3203,11 +3235,6 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         events = self.sessions.session_events(session_id)
         if not events and not history:
             raise ValueError("No session trace is available for final-review.")
-        self.authority.close(session_id, payload.get('_owner', 'local-dev'))
-        existing = next((e.get('payload', {}).get('report') for e in reversed(events)
-                         if e.get('eventType', e.get('event_type')) == 'post_session_supervisor_report'), None)
-        if existing:
-            return existing
         trace = build_post_session_trace(events, history)
         hk_pcf_seed = build_hk_pcf_assessment(case_profile, trace)
         grounding_profile = load_active_grounding_profile(self.root_dir, case_profile)
@@ -3228,13 +3255,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             hk_pcf_seed,
             response_language(payload),
         )
-        self.sessions.append_event(
-            session_id,
-            f"trace-{uuid.uuid4().hex[:16]}",
-            "post_session_supervisor_report",
-            {"report": report, "traceSummary": summarize_post_session_trace(trace)},
-        )
-        return report
+        return self.authority.commit_review(session_id, payload.get('_owner', 'local-dev'), token,
+                                            record['stateVersion'], report, summarize_post_session_trace(trace))
 
     def synthesize_tts(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.voice_synthesis.synthesize(payload)

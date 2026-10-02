@@ -28,8 +28,14 @@ const server = createServer(async (req, res) => {
       req.authSetCookie = authResult.setCookie;
     }
     req.authUser = authResult.user;
+    let pathname;
+    try {
+      pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname).replace(/\/+$/, '') || '/';
+    } catch {
+      return sendJsonWithRequest(req, res, 400, { error: 'Invalid request path.' });
+    }
 
-    if (req.url === '/api/auth/session') {
+    if (pathname === '/api/auth/session') {
       return sendJsonWithRequest(req, res, 200, {
         authenticated: true,
         username: authResult.user.username,
@@ -38,19 +44,19 @@ const server = createServer(async (req, res) => {
       });
     }
 
-    if (isInstructorOnlyPath(req.url) && authResult.user.role !== 'instructor') {
+    if (isInstructorOnlyPath(pathname) && authResult.user.role !== 'instructor') {
       return sendJsonWithRequest(req, res, 403, { error: 'Instructor access required.' });
     }
 
-    if (req.url === '/api/shutdown') {
+    if (pathname === '/api/shutdown') {
       return handleShutdown(req, res);
     }
 
-    if (req.url === '/api/health') {
+    if (pathname === '/api/health') {
       return handleHealth(req, res);
     }
 
-    if (req.url?.startsWith('/api/')) {
+    if (pathname.startsWith('/api/')) {
       return proxyRequest(req, res, req.url);
     }
 
@@ -76,12 +82,15 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Social Work Avatar Lab running at http://${host}:${port}/`);
+  console.log(`Social Work Avatar Lab running at http://${host}:${server.address().port}/`);
   console.log(`Proxying app API routes to ADK service at ${adkServiceUrl}.`);
 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (!req.url?.startsWith('/api/voice-stream')) {
+  let pathname;
+  try { pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname).replace(/\/+$/, '') || '/'; }
+  catch { socket.destroy(); return; }
+  if (pathname !== '/api/voice-stream') {
     socket.destroy();
     return;
   }
@@ -109,7 +118,9 @@ async function handleShutdown(req, res) {
   }
 
   try {
-    await fetch(`${adkServiceUrl}/api/shutdown`, { method: 'POST' });
+    await fetch(`${adkServiceUrl}/api/shutdown`, {
+      method: 'POST', headers: { 'X-App-Role': 'instructor' }, signal: AbortSignal.timeout(5000),
+    });
   } catch {
     // ADK may already be down or managed by dev-all; still stop the local app server.
   }
@@ -208,6 +219,7 @@ async function proxyRequest(req, res, targetPath) {
       method: req.method,
       headers,
       body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
+      signal: AbortSignal.timeout(165_000),
     });
     const responseBody = await response.text();
     res.writeHead(response.status, withAuthCookie(req, {
@@ -226,7 +238,7 @@ async function proxyRequest(req, res, targetPath) {
 
 async function handleHealth(req, res) {
   try {
-    const response = await fetch(`${adkServiceUrl}/health`);
+    const response = await fetch(`${adkServiceUrl}/health`, { signal: AbortSignal.timeout(10_000) });
     const adkHealth = await response.json().catch(() => ({
       ok: false,
       error: `ADK health returned non-JSON status ${response.status}`,
@@ -295,7 +307,9 @@ function proxyWebSocketUpgrade(req, socket, head) {
   }
 
   const upstream = net.connect(Number(target.port || 80), target.hostname);
+  const connectTimeout = setTimeout(() => upstream.destroy(new Error('ADK connection timed out.')), 10_000);
   upstream.on('connect', () => {
+    clearTimeout(connectTimeout);
     const headerLines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`, `Host: ${target.host}`];
     for (let index = 0; index < req.rawHeaders.length; index += 2) {
       const name = req.rawHeaders[index];
@@ -313,6 +327,8 @@ function proxyWebSocketUpgrade(req, socket, head) {
   });
   upstream.on('error', () => socket.destroy());
   socket.on('error', () => upstream.destroy());
+  upstream.on('close', () => { clearTimeout(connectTimeout); socket.destroy(); });
+  socket.on('close', () => upstream.destroy());
 }
 
 function readRawBody(req) {
@@ -343,12 +359,12 @@ function sendJsonWithRequest(req, res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function isInstructorOnlyPath(rawUrl) {
-  const pathname = new URL(rawUrl ?? '/', 'http://localhost').pathname;
+function isInstructorOnlyPath(pathname) {
   return pathname === '/instructor'
     || pathname.startsWith('/instructor/')
     || pathname === '/api/evidence-cards'
     || pathname === '/api/supervisor-review'
+    || pathname === '/api/shutdown'
     || pathname === '/api/session/export';
 }
 

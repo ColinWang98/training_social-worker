@@ -4,7 +4,7 @@ import { createActor } from 'xstate';
 import { PostSessionReportDialog } from './components/CasePanel';
 import { InterviewPanel } from './components/InterviewPanel';
 import { TraineeContextDrawer } from './components/TraineeContextDrawer';
-import { AuthSession, requestAuthSession, requestClientResponse, requestFinalReview, requestTtsAudio, resetSession, startSession, TtsResponse } from './lib/apiClient';
+import { ApiRequestError, AuthSession, requestAuthSession, requestClientResponse, requestErrorMessage, requestFinalReview, requestTtsAudio, resetSession, startSession, TtsResponse } from './lib/apiClient';
 import { affectPresets, avatarAssets, DEFAULT_AVATAR_ID, ExpressionWeights } from './lib/avatarConfig';
 import { estimateCantoneseSpeechDuration } from './lib/arkitExpressions';
 import type { BrowserVadStatus } from './lib/browserVad';
@@ -155,10 +155,13 @@ export default function App() {
   const pendingResetSessionIdRef = useRef<string | null>(null);
   const pendingTurnRef = useRef<{ text: string; id: string } | null>(null);
   const submittedRef = useRef(false);
+  const reviewSubmittedRef = useRef(false);
+  const sessionEpochRef = useRef(0);
   const committedTurnIdsRef = useRef(new Set<string>());
   const [turns, setTurns] = useState<InterviewTurn[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isPending, setIsPending] = useState(false);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [latestClientResponse, setLatestClientResponse] = useState<ClientResponse | null>(null);
   const [postSessionReport, setPostSessionReport] = useState<PostSessionSupervisorReport | null>(null);
@@ -484,6 +487,7 @@ export default function App() {
   useEffect(() => {
     if (!caseProfile.id) return;
     let cancelled = false;
+    setErrorMessage(null);
     const previousSessionId = sessionIdRef.current ?? pendingResetSessionIdRef.current;
     const openSession = previousSessionId
       ? resetSession({ caseProfile, sessionId: previousSessionId })
@@ -492,6 +496,7 @@ export default function App() {
       .then((session) => {
         if (cancelled) return;
         stateVersionRef.current = session.stateVersion;
+        sessionIdRef.current = session.sessionId;
         pendingResetSessionIdRef.current = null;
         setSessionId(session.sessionId);
         setCaseProfile(displayCase(session.sessionView));
@@ -499,19 +504,18 @@ export default function App() {
       .catch((error) => {
         if (!cancelled) {
           setSessionId(null);
-          setErrorMessage(
-            error instanceof Error
-              ? error.message
-              : 'ADK session 建立失敗，請確認 sidecar 已啟動。',
-          );
+          sessionIdRef.current = null;
+          setErrorMessage(requestErrorMessage(error, responseLanguage));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [caseProfile.id]);
+  }, [caseProfile.id, sessionAttempt]);
 
   const commitClientResponse = useCallback(async (studentText: string, clientResponse: ClientResponse, responseId?: string) => {
+    if (clientResponse.sessionId && clientResponse.sessionId !== sessionIdRef.current) return;
+    if (typeof clientResponse.stateVersion === 'number' && clientResponse.stateVersion < stateVersionRef.current) return;
     const turnId = clientResponse.turnId;
     if (turnId && committedTurnIdsRef.current.has(turnId)) return;
     if (turnId) committedTurnIdsRef.current.add(turnId);
@@ -523,7 +527,7 @@ export default function App() {
       ...createTurn('client', clientResponse.clientText),
       revealedFacts: clientResponse.revealedFacts,
       disclosureLedger: clientResponse.disclosureLedger,
-      responseId,
+      responseId: responseId ?? clientResponse.responseId,
       deliveryStatus: clientResponse.deliveryStatus ?? 'completed',
     };
     const nextCase = clientResponse.sessionView
@@ -582,6 +586,7 @@ export default function App() {
   }, [stopPlayback, stopVoiceCapture]);
 
   const startVoiceCapture = useCallback(async () => {
+    if (!sessionIdRef.current || reviewSubmittedRef.current) return;
     if (voiceEnabled || isPending) return;
     setVoiceEnabled(true);
     sendVoiceStateEvent('START');
@@ -887,6 +892,11 @@ export default function App() {
   const handleCaseChange = useCallback((caseId: string) => {
     const nextCase = caseProfiles.find((profile) => profile.id === caseId);
     if (!nextCase) return;
+    if (caseId === caseProfileRef.current.id) return;
+    sessionEpochRef.current += 1;
+    submittedRef.current = false;
+    reviewSubmittedRef.current = false;
+    setIsPending(false);
     stopPlayback();
     stopVoiceCapture();
     setCaseProfile(nextCase);
@@ -912,11 +922,13 @@ export default function App() {
     setVoiceTiming(emptyVoiceTiming);
     setVoiceError(null);
     sendVoiceStateEvent('STOP');
-  }, [sendVoiceStateEvent, stopPlayback, stopVoiceCapture]);
+  }, [caseProfiles, sendVoiceStateEvent, stopPlayback, stopVoiceCapture]);
 
   const handleSubmit = useCallback(async () => {
     const studentText = inputValue.trim();
-    if (!studentText || isPending || sessionEnded) return;
+    if (!studentText || !sessionId || submittedRef.current || reviewSubmittedRef.current || isPending || sessionEnded) return;
+    const epoch = sessionEpochRef.current;
+    submittedRef.current = true;
 
     setErrorMessage(null);
     setPostSessionReport(null);
@@ -938,23 +950,34 @@ export default function App() {
         retrievalOptions,
         responseLanguage,
       });
+      if (epoch !== sessionEpochRef.current) return;
       await commitClientResponse(studentText, clientResponse);
       setInputValue('');
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : responseLanguage === 'english'
-            ? 'This turn failed. Check the local API or DeepSeek key, then retry.'
-            : '本輪生成失敗。請檢查本地 API 或 DeepSeek key 後重試。',
-      );
+      if (epoch !== sessionEpochRef.current) return;
+      if (error instanceof ApiRequestError && error.code === 'state_version_conflict') {
+        try {
+          const current = await startSession({ sessionId, caseProfile });
+          if (epoch !== sessionEpochRef.current) return;
+          stateVersionRef.current = current.stateVersion;
+          setCaseProfile(displayCase(current.sessionView));
+        } catch { /* Keep the original error and input available for retry. */ }
+      }
+      if (epoch === sessionEpochRef.current) setErrorMessage(requestErrorMessage(error, responseLanguage));
     } finally {
-      setIsPending(false);
+      if (epoch === sessionEpochRef.current) {
+        submittedRef.current = false;
+        setIsPending(false);
+      }
     }
   }, [caseProfile, commitClientResponse, inputValue, isPending, responseLanguage, retrievalOptions, sessionEnded, sessionId, simulationMethod, turns]);
 
   const handleEndSession = useCallback(async () => {
-    if (turns.length === 0 || isPending || isFinalReviewPending) return;
+    if (turns.length === 0 || !sessionId || submittedRef.current || reviewSubmittedRef.current || isPending || isFinalReviewPending) return;
+    const epoch = sessionEpochRef.current;
+    reviewSubmittedRef.current = true;
+    stopVoiceCapture();
+    stopPlayback();
     setErrorMessage(null);
     setIsFinalReviewPending(true);
     try {
@@ -964,21 +987,19 @@ export default function App() {
         sessionId,
         responseLanguage,
       });
+      if (epoch !== sessionEpochRef.current) return;
       setPostSessionReport(report);
       setIsReportDialogOpen(true);
       setSessionEnded(true);
       stopVoiceCapture();
       stopPlayback();
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : responseLanguage === 'english'
-            ? 'Final review generation failed. Check the ADK service or DeepSeek key.'
-            : '結束訪談評估生成失敗，請檢查 ADK service 或 DeepSeek key。',
-      );
+      if (epoch === sessionEpochRef.current) setErrorMessage(requestErrorMessage(error, responseLanguage));
     } finally {
-      setIsFinalReviewPending(false);
+      if (epoch === sessionEpochRef.current) {
+        reviewSubmittedRef.current = false;
+        setIsFinalReviewPending(false);
+      }
     }
   }, [caseProfile, isFinalReviewPending, isPending, responseLanguage, sessionId, stopPlayback, stopVoiceCapture, turns]);
 
@@ -1097,6 +1118,9 @@ export default function App() {
           errorMessage={errorMessage}
           inputValue={inputValue}
           isPending={isPending}
+          sessionReady={Boolean(sessionId)}
+          sessionClosing={isFinalReviewPending}
+          onRetrySession={() => setSessionAttempt((attempt) => attempt + 1)}
           sessionEnded={sessionEnded}
           latestClientResponse={latestClientResponse}
           partialTranscript={partialTranscript}

@@ -179,9 +179,17 @@ def main() -> None:
             cancelled_turn = receive_until(ws, "turn_started", seen)
             ws.send_json({"type": "barge_in", "utteranceId": "utt-interrupt"})
             barge_ack = receive_until(ws, "barge_in_ack", seen)
-            receive_until(ws, "response_cancelled", seen)
+            cancellations = receive_until_count(ws, "response_cancelled", 1, seen)
+            assert cancellations[-1]['responseId'] == cancelled_turn['responseId']
             if barge_ack.get("responseId") != cancelled_turn.get("responseId"):
                 raise AssertionError(f"Barge-in did not cancel the active response: {barge_ack}")
+
+            # Cancellation cleanup must finish before a new turn can reserve state.
+            ws.send_json([])
+            assert receive_until(ws, "error", seen)['recoverable']
+            fake.emit({"type": "asr_final", "transcript": "繼續下一句", "resultEndMs": 9000})
+            resumed = receive_until_count(ws, "tts_audio", 4, seen)[-1]
+            assert resumed['responseId'] != cancelled_turn['responseId']
 
         if fake.student_texts[:2] != ["你好我想講多啲", "第二句"]:
             raise AssertionError(f"Unexpected processed transcripts: {fake.student_texts}")

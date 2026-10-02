@@ -13,6 +13,29 @@ import {
 } from './interviewTypes';
 import { displayCase } from './caseProfile';
 
+export class ApiRequestError extends Error {
+  constructor(public code: string, public status: number) {
+    super(code);
+  }
+}
+
+export function requestErrorMessage(error: unknown, language: ResponseLanguage): string {
+  const code = error instanceof ApiRequestError ? error.code : 'connection_failed';
+  const messages: Record<string, [string, string]> = {
+    session_busy: ['上一句仍在處理，請稍後重試。', 'The previous turn is still processing. Please retry shortly.'],
+    review_busy: ['報告正在生成，請稍後再開啟。', 'The report is being generated. Please retry shortly.'],
+    session_closed: ['這次訪談已結束，請選擇個案開始新練習。', 'This interview has ended. Select a case to start again.'],
+    session_not_found: ['無法恢復這次訪談，請重新開始練習。', 'This interview could not be restored. Please start a new session.'],
+    state_version_conflict: ['訪談狀態已變更，輸入已保留，請重試。', 'The interview state changed. Your input is saved; please retry.'],
+    request_timeout: ['回覆等候逾時，輸入已保留。重試會取回同一輪結果。', 'The response timed out. Your input is saved; retry retrieves the same turn.'],
+    turn_cancelled: ['這句已取消，請輸入新的訊息。', 'This turn was cancelled. Please enter a new message.'],
+    authentication_required: ['登入已失效，請重新載入頁面登入。', 'Please reload the page to sign in again.'],
+    service_unavailable: ['服務正在啟動或恢復，請稍後重試。', 'The service is starting or recovering. Please retry shortly.'],
+    connection_failed: ['連線未完成，輸入已保留，請重試。', 'The connection failed. Your input is saved; please retry.'],
+  };
+  return (messages[code] ?? ['未能完成這次請求，請重試。', 'This request could not be completed. Please retry.'])[language === 'english' ? 1 : 0];
+}
+
 export type AuthSession = {
   authenticated: boolean;
   username: string;
@@ -175,17 +198,31 @@ export async function listEvidenceCards(request: EvidenceCardListRequest): Promi
 }
 
 async function postJson(path: string, body: unknown) {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 165_000);
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
 
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(data?.error ?? `Request failed with ${response.status}`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = typeof data?.detail === 'string' ? data.detail : data?.error;
+      const code = response.status === 401 ? 'authentication_required'
+        : [502, 503, 504].includes(response.status) ? 'service_unavailable'
+          : typeof detail === 'string' ? detail : 'request_failed';
+      throw new ApiRequestError(code, response.status);
+    }
+    return data;
+  } catch (error) {
+    if (controller.signal.aborted) throw new ApiRequestError('request_timeout', 408);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return data;
 }
 
 function isClientResponse(value: unknown): value is ClientResponse {
