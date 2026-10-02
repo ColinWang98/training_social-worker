@@ -61,6 +61,8 @@ fi
 echo "[fly-start] Node server target: ${HOST}:${PORT}"
 echo "[fly-start] ADK service target: ${ADK_SERVICE_HOST}:${ADK_SERVICE_PORT}"
 echo "[fly-start] Google voice enabled: ${GOOGLE_VOICE_ENABLED:-false}"
+echo "[fly-start] Voice protocol: realtime-v2 (binary PCM preferred)"
+echo "[fly-start] Streaming TTS enabled: ${GOOGLE_TTS_STREAMING_ENABLED:-false}"
 echo "[fly-start] Google credentials detected: $([[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && echo true || echo false)"
 echo "[fly-start] Rhubarb binary: ${RHUBARB_BIN:-not-set} $([[ -x "${RHUBARB_BIN:-}" ]] && echo available || echo unavailable)"
 echo "[fly-start] Corpus path: $(readlink -f /app/data 2>/dev/null || echo /app/data)"

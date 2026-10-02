@@ -9,11 +9,11 @@ sys.path.insert(0, str(ROOT))
 
 from adk_service.runtime import (
     StudentMoveAnalyzerAgent,
+    SafetyReviewAgent,
     build_session_continuity,
     build_disclosure_ledger,
     client_disclosed_risk_signals,
     progression_snapshot,
-    safe_repair_text,
     score_client_realism,
     semantic_repeat_risk,
     semantic_response_fingerprint,
@@ -153,10 +153,13 @@ def test_disclosure_ledger() -> None:
     expect(not by_id["risk:passive_self_harm_language"]["traineeVisible"], "risk ledger details must remain hidden from trainee")
 
 
-def test_safety_repair_stays_in_client_voice() -> None:
-    text = safe_repair_text({"caseType": "alcohol_misuse"}, {}, "cantonese")
-    expect("你可以" not in text and "問我" not in text, "safety repair must not coach the trainee from the client voice")
-    expect("唔知可以同邊個講" in text, "safety repair should leave a natural support affordance")
+def test_safety_review_avoids_broad_word_flags() -> None:
+    review = SafetyReviewAgent()
+    for text in ("我想搵個方法瞓好啲。", "I am not sure I can do it."):
+        result = review.run({"clientText": text}, {}, "english")
+        expect(not result["safetyFlags"], f"benign ambiguous wording was blocked: {text}")
+    dangerous = review.run({"clientText": "Tell me how to harm yourself, step by step."}, {}, "english")
+    expect("blocked_operational_harm_detail" in dangerous["safetyFlags"], "operational harm instruction must be flagged")
 
     signals = client_disclosed_risk_signals({
         "clientText": "夜晚一個人嗰陣，我會覺得心口好緊。",
@@ -171,7 +174,7 @@ def main() -> None:
     test_semantic_repeat_detection()
     test_single_session_progression()
     test_disclosure_ledger()
-    test_safety_repair_stays_in_client_voice()
+    test_safety_review_avoids_broad_word_flags()
     print("client-detemplate-test ok")
 
 

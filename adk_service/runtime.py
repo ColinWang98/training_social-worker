@@ -17,7 +17,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib import error, request
+
+import httpx
 
 try:
     import psycopg
@@ -36,13 +37,20 @@ except Exception:  # pragma: no cover - optional Supabase dependency
 try:  # Optional at import time so static checks still work before deps are installed.
     from google.adk.agents import LlmAgent
     from google.adk.models.lite_llm import LiteLlm
-    from google.adk.sessions import DatabaseSessionService
+    from google.adk.runners import Runner
+    from google.adk.sessions import DatabaseSessionService, InMemorySessionService
+    from google.genai.types import Content, GenerateContentConfig, Part
 
     ADK_AVAILABLE = True
 except Exception:  # pragma: no cover - depends on local Python environment
     LlmAgent = None
     LiteLlm = None
+    Runner = None
     DatabaseSessionService = None
+    InMemorySessionService = None
+    Content = None
+    GenerateContentConfig = None
+    Part = None
     ADK_AVAILABLE = False
 
 
@@ -671,9 +679,8 @@ class DeepSeekClient:
     async def json_completion(self, prompt: str, temperature: float) -> dict[str, Any]:
         if not self.api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is not set.")
-        return await asyncio.to_thread(self._json_completion_sync, prompt, temperature)
-
-    def _json_completion_sync(self, prompt: str, temperature: float) -> dict[str, Any]:
+        if os.environ.get("ADK_LLM_EXECUTION_ENABLED", "false").lower() == "true":
+            return await self._adk_json_completion(prompt, temperature)
         payload = {
             "model": self.model,
             "temperature": temperature,
@@ -690,23 +697,63 @@ class DeepSeekClient:
                 {"role": "user", "content": prompt},
             ],
         }
-        req = request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
-        )
         try:
-            with request.urlopen(req, timeout=60) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"DeepSeek request failed with {exc.code}: {detail}") from exc
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"DeepSeek request failed with {exc.response.status_code}: {exc.response.text}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"DeepSeek request failed: {exc}") from exc
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         return parse_json_object(content)
+
+    async def _adk_json_completion(self, prompt: str, temperature: float) -> dict[str, Any]:
+        if not ADK_AVAILABLE or not all((Runner, InMemorySessionService, Content, GenerateContentConfig, Part)):
+            raise RuntimeError("ADK Runner execution is enabled but its runtime is unavailable.")
+        app_name = "social-work-simulation"
+        user_id = "ephemeral-invocation"
+        session_id = f"invocation-{uuid.uuid4().hex}"
+        service = InMemorySessionService()
+        await service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
+        agent = LlmAgent(
+            name="structured_social_work_response",
+            model=LiteLlm(
+                model=f"openai/{self.model}",
+                api_base=self.base_url,
+                api_key=self.api_key,
+            ),
+            instruction=(
+                "Return only one valid JSON object. Do not add markdown or prose outside JSON. "
+                "Follow the user's requested schema and safety constraints exactly. This is a social-work "
+                "training simulator, not medical diagnosis or treatment. Use Traditional Chinese for "
+                "professional feedback and Hong Kong Cantonese for client speech when requested."
+            ),
+            generate_content_config=GenerateContentConfig(temperature=temperature),
+            include_contents="none",
+        )
+        runner = Runner(agent=agent, app_name=app_name, session_service=service)
+        final_text = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=Content(role="user", parts=[Part(text=prompt)]),
+        ):
+            if event.is_final_response() and event.content:
+                final_text = "".join(part.text or "" for part in event.content.parts or [])
+        if not final_text:
+            raise RuntimeError("ADK Runner completed without a final JSON response.")
+        return parse_json_object(final_text)
 
 
 class AgentSessionStore:
@@ -2017,7 +2064,7 @@ class ClientSimulationAgent(ManagedAgent):
         prompt = build_client_prompt(payload)
         parsed = await self.llm.json_completion(prompt, 0.7)
         if not is_client_response(parsed):
-            raise RuntimeError("DeepSeek client response did not match the expected schema.")
+            return parsed if isinstance(parsed, dict) else {}
         parsed["riskSignals"] = client_disclosed_risk_signals(
             parsed,
             payload.get("caseProfile", {}).get("caseType"),
@@ -2042,11 +2089,12 @@ class SafetyReviewAgent(ManagedAgent):
 
         # Simulation-safe: passive ideation, shame, withdrawal fear, relapse triggers, and conflict cues are allowed.
         dangerous_method = re.search(
-            r"(step[- ]?by[- ]?step|具體步驟|方法|劑量|dosage|overdose|上吊|打結|割腕|刀片|rope|noose|poison|where to buy)",
+            r"(?:自殺|自殘|傷害自己|傷害他人|殺人|suicide|self[- ]harm|harm yourself|hurt yourself|kill).{0,60}(?:具體步驟|劑量|step[- ]by[- ]step|dosage|where to buy)"
+            r"|(?:具體步驟|step[- ]by[- ]step|where to buy).{0,60}(?:自殺|自殘|suicide|self[- ]harm|harm yourself|hurt yourself|poison)",
             text,
             re.I,
         )
-        encouragement = re.search(r"(你應該自殺|值得去死|do it|go kill|beautiful plan|完成自殺)", text, re.I)
+        encouragement = re.search(r"(你應該自殺|值得去死|you should kill yourself|go kill yourself)", text, re.I)
         diagnosis_or_prescription = re.search(
             r"(你有抑鬱症|你係抑鬱症|確診|診斷你|處方|開藥|用藥劑量|you have depression|diagnose|prescribe)",
             text,
@@ -2061,13 +2109,14 @@ class SafetyReviewAgent(ManagedAgent):
             flags.append("blocked_diagnosis_or_prescription")
 
         repaired = dict(response)
-        if flags:
-            repaired["clientText"] = safe_repair_text(case_profile, response, response_language)
-            repaired["riskSignals"] = unique_strings([*response.get("riskSignals", []), "safety_review_repaired"])
-            repaired["motionCue"] = "look_down"
-            repaired["affect"] = "withdrawn"
         repaired["safetyFlags"] = flags
         return repaired
+
+
+from .spoken_text import validate_spoken_text, require_spoken_text
+from . import reaction_planning
+from .session_authority import SessionAuthority, SessionError
+from .case_registry import resolve_case, session_view
 
 
 class ClientRealismScoringAgent(ManagedAgent):
@@ -2085,16 +2134,26 @@ class ClientRealismScoringAgent(ManagedAgent):
         if self._needs_repair(assessment) and self.llm.enabled:
             repaired = await self._repair_once(payload, assessed, assessment)
             if repaired:
-                return self._calibrate_response(
+                return self._require_valid(payload, self._calibrate_response(
                     payload,
                     repaired,
                     repair_applied=True,
                     repair_reason=self._repair_reason(assessment),
-                )
+                ))
         if self._needs_repair(assessment):
             assessed["realismAssessment"]["repairApplied"] = False
             assessed["realismAssessment"]["repairReason"] = f"需要 LLM repair：{self._repair_reason(assessment)}"
-        return assessed
+        return self._require_valid(payload, assessed)
+
+    def _require_valid(self, payload, response):
+        require_spoken_text(response)
+        if self._needs_repair(response.get('realismAssessment', {})):
+            raise SessionError('response_validation_failed', 422)
+        if reaction_planning.enabled():
+            reaction_planning.require_plan(payload, response)
+            if response.get("realismAssessment", {}).get("reactionSafetyFlags"):
+                raise ValueError("Client safety validation failed; retry the turn.")
+        return response
 
     def _calibrate_response(
         self,
@@ -2104,17 +2163,34 @@ class ClientRealismScoringAgent(ManagedAgent):
         repair_reason: str | None = None,
     ) -> dict[str, Any]:
         calibrated = json.loads(json.dumps(response, ensure_ascii=False))
-        assessment = score_client_realism(payload, calibrated)
+        schema_valid = is_client_response(calibrated)
+        assessment = score_client_realism(payload, calibrated) if schema_valid else {}
+        assessment['schemaValid'] = schema_valid
+        assessment["spokenTextValidation"] = validate_spoken_text(calibrated.get("clientText"))
+        assessment["reactionSafetyFlags"] = SafetyReviewAgent().run(
+            calibrated, payload.get("caseProfile", {}), response_language(payload)
+        ).get("safetyFlags", [])
+        if reaction_planning.enabled():
+            assessment["reactionPlanValidation"] = reaction_planning.validate(payload, calibrated)
         if repair_applied:
             assessment["repairApplied"] = True
             assessment["repairReason"] = repair_reason or "回應真實度不足，已重新校準。"
-        calibrated = apply_realism_calibration(payload, calibrated, assessment)
+        if schema_valid:
+            calibrated = apply_realism_calibration(payload, calibrated, assessment)
+        if reaction_planning.enabled():
+            # State deltas remain policy-controlled; calibration must not invent a different emotion.
+            calibrated["affect"] = response.get("affect")
+            calibrated["reactionPlanValidation"] = assessment["reactionPlanValidation"]
         calibrated["realismAssessment"] = assessment
         return calibrated
 
     def _needs_repair(self, assessment: dict[str, Any]) -> bool:
         return bool(
-            assessment.get("overDisclosureRisk")
+            not assessment.get('schemaValid', True)
+            or not assessment.get("spokenTextValidation", {}).get("valid", True)
+            or not assessment.get("reactionPlanValidation", {}).get("valid", True)
+            or assessment.get("reactionSafetyFlags")
+            or assessment.get("overDisclosureRisk")
             or assessment.get("underReactionRisk")
             or assessment.get("languageNaturalnessScore", 10) < 6.5
             or assessment.get("consistencyScore", 10) < 5.5
@@ -2123,10 +2199,19 @@ class ClientRealismScoringAgent(ManagedAgent):
             or assessment.get("realismScore", 10) < 5.5
             or assessment.get("avoidanceOveruseRisk")
             or assessment.get("semanticRepeatRisk")
+            or assessment.get("repeatedResponseRisk")
         )
 
     def _repair_reason(self, assessment: dict[str, Any]) -> str:
         reasons = []
+        if not assessment.get('schemaValid', True):
+            reasons.append('Return the complete client response JSON schema')
+        if not assessment.get("reactionPlanValidation", {}).get("valid", True):
+            reasons.append("Invalid reaction plan: " + ",".join(assessment["reactionPlanValidation"]["errors"]))
+        if assessment.get("reactionSafetyFlags"):
+            reasons.append("Remove unsafe content without scripted replacement")
+        if not assessment.get("spokenTextValidation", {}).get("valid", True):
+            reasons.append("Remove stage directions, role prefixes and narration; output spoken dialogue only")
         if assessment.get("overDisclosureRisk"):
             reasons.append("過早或過度透露")
         if assessment.get("underReactionRisk"):
@@ -2367,7 +2452,7 @@ class VoiceSynthesisAgent(ManagedAgent):
         super().__init__(
             "VoiceSynthesisAgent",
             "Synthesize service-user speech with Google Text-to-Speech.",
-            os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Chirp3-HD-Achird"),
+            os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Standard-D"),
             False,
         )
         self.lip_sync = RhubarbLipSyncService()
@@ -2375,6 +2460,31 @@ class VoiceSynthesisAgent(ManagedAgent):
     @property
     def enabled(self) -> bool:
         return os.environ.get("GOOGLE_VOICE_ENABLED", "").lower() == "true"
+
+    @property
+    def streaming_enabled(self) -> bool:
+        return os.environ.get("GOOGLE_TTS_STREAMING_ENABLED", "").lower() == "true"
+
+    def streaming_capability(self) -> dict[str, Any]:
+        available = False
+        reason = "disabled"
+        if self.streaming_enabled and self.enabled and os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            try:
+                from google.cloud import texttospeech
+
+                available = hasattr(texttospeech.TextToSpeechClient, "streaming_synthesize")
+                reason = "ready" if available else "client_library_unsupported"
+            except Exception:
+                reason = "google_tts_dependency_unavailable"
+        elif self.streaming_enabled and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            reason = "credentials_missing"
+        return {
+            "enabled": self.streaming_enabled,
+            "available": available,
+            "reason": reason,
+            "cantoneseVoice": os.environ.get("GOOGLE_TTS_STREAMING_YUE_VOICE", "yue-HK-Chirp3-HD-Achird"),
+            "englishVoice": os.environ.get("GOOGLE_TTS_STREAMING_EN_VOICE", "en-US-Chirp3-HD-Charon"),
+        }
 
     def synthesize(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = payload.get("text")
@@ -2400,7 +2510,7 @@ class VoiceSynthesisAgent(ManagedAgent):
         default_voice = (
             os.environ.get("GOOGLE_TTS_EN_VOICE", "en-US-Wavenet-D")
             if language_mode == "english"
-            else os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Chirp3-HD-Achird")
+            else os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Standard-D")
         )
         voice_name = voice_override.strip() if isinstance(voice_override, str) and voice_override.strip() else default_voice
         speaking_rate, pitch = tts_style_for_affect(payload.get("affect"), payload.get("voiceStyle"), text)
@@ -2476,17 +2586,185 @@ class VoiceSynthesisAgent(ManagedAgent):
             result["lipSync"] = lip_sync
         return result
 
+    def start_stream(
+        self,
+        payload: dict[str, Any],
+        event_queue: "asyncio.Queue[dict[str, Any]]",
+        loop: asyncio.AbstractEventLoop,
+        response_id: str,
+    ) -> "StreamingTtsSession":
+        capability = self.streaming_capability()
+        if not capability["available"]:
+            raise RuntimeError(f"Google streaming TTS unavailable: {capability['reason']}")
 
-class StreamingSpeechSession:
-    def __init__(self, audio_queue: "queue.Queue[bytes | None]", worker: threading.Thread) -> None:
-        self.audio_queue = audio_queue
+        cancel_event = threading.Event()
+
+        def emit(event: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(event_queue.put_nowait, event)
+
+        def worker() -> None:
+            try:
+                from google.cloud import texttospeech
+
+                text = str(payload.get("text") or "").strip()
+                if not text:
+                    raise ValueError("text is required for streaming TTS.")
+                language_mode = response_language({"responseLanguage": payload.get("language")})
+                language = (
+                    os.environ.get("GOOGLE_TTS_EN_LANGUAGE", "en-US")
+                    if language_mode == "english"
+                    else os.environ.get("GOOGLE_TTS_LANGUAGE", "yue-HK")
+                )
+                voice_name = (
+                    os.environ.get("GOOGLE_TTS_STREAMING_EN_VOICE", "en-US-Chirp3-HD-Charon")
+                    if language_mode == "english"
+                    else os.environ.get("GOOGLE_TTS_STREAMING_YUE_VOICE", "yue-HK-Chirp3-HD-Achird")
+                )
+                speaking_rate, _ = tts_style_for_affect(payload.get("affect"), payload.get("voiceStyle"), text)
+                sample_rate = int(clamp_float(os.environ.get("GOOGLE_TTS_STREAMING_SAMPLE_RATE", "24000"), 16000, 48000))
+                client = texttospeech.TextToSpeechClient()
+                config = texttospeech.StreamingSynthesizeConfig(
+                    voice=texttospeech.VoiceSelectionParams(
+                        language_code=language,
+                        name=voice_name,
+                        ssml_gender=texttospeech.SsmlVoiceGender.MALE,
+                    ),
+                    streaming_audio_config=texttospeech.StreamingAudioConfig(
+                        audio_encoding=texttospeech.AudioEncoding.PCM,
+                        sample_rate_hertz=sample_rate,
+                        speaking_rate=speaking_rate,
+                    ),
+                )
+
+                def requests():
+                    yield texttospeech.StreamingSynthesizeRequest(streaming_config=config)
+                    for chunk in streaming_text_chunks(text):
+                        if cancel_event.is_set():
+                            return
+                        yield texttospeech.StreamingSynthesizeRequest(
+                            input=texttospeech.StreamingSynthesisInput(text=chunk)
+                        )
+
+                emit({
+                    "type": "tts_stream_started",
+                    "responseId": response_id,
+                    "provider": "google-tts-streaming",
+                    "voice": voice_name,
+                    "sampleRate": sample_rate,
+                })
+                for response in client.streaming_synthesize(requests=requests(), timeout=30):
+                    if cancel_event.is_set():
+                        emit({"type": "tts_stream_cancelled", "responseId": response_id})
+                        return
+                    if response.audio_content:
+                        emit({
+                            "type": "tts_stream_chunk",
+                            "responseId": response_id,
+                            "audioPcmBase64": base64.b64encode(response.audio_content).decode("ascii"),
+                            "sampleRate": sample_rate,
+                        })
+                emit({"type": "tts_stream_done", "responseId": response_id})
+            except Exception as exc:
+                emit({
+                    "type": "tts_stream_error",
+                    "responseId": response_id,
+                    "message": str(exc),
+                    "recoverable": True,
+                })
+
+        thread = threading.Thread(target=worker, daemon=True, name=f"tts-{response_id}")
+        thread.start()
+        return StreamingTtsSession(cancel_event, thread)
+
+
+class StreamingTtsSession:
+    def __init__(self, cancel_event: threading.Event, worker: threading.Thread) -> None:
+        self.cancel_event = cancel_event
         self.worker = worker
 
+    def stop(self) -> None:
+        self.cancel_event.set()
+
+
+def streaming_text_chunks(text: str, max_chars: int = 120) -> list[str]:
+    parts = [part.strip() for part in re.split(r"(?<=[。！？!?；;,.，])", text) if part.strip()]
+    chunks: list[str] = []
+    current = ""
+    for part in parts or [text]:
+        if current and len(current) + len(part) > max_chars:
+            chunks.append(current)
+            current = part
+        else:
+            current += part
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+class AudioCaptureGap(RuntimeError):
+    pass
+
+
+def realtime_pcm_chunks(audio_queue: "queue.Queue[bytes | None]", sample_rate: int, stats=None):
+    missing_seconds = 0.0
+    while True:
+        try:
+            chunk = audio_queue.get(timeout=0.1)
+        except queue.Empty:
+            missing_seconds += 0.1
+            if missing_seconds >= 2:
+                raise AudioCaptureGap("No microphone audio received for two seconds.")
+            chunk = bytes(int(sample_rate * 0.1) * 2)
+            if stats is not None:
+                stats["syntheticSilenceMs"] += 100
+        else:
+            missing_seconds = 0
+            if stats is not None and chunk:
+                stats["realAudioMs"] += len(chunk) * 500 / sample_rate
+        if chunk is None:
+            return
+        if chunk:
+            yield chunk
+
+
+class StreamingSpeechSession:
+    def __init__(self, audio_queue: "queue.Queue[bytes | None]", worker: threading.Thread, sample_rate=16000, on_gap=None, stats=None) -> None:
+        self.audio_queue = audio_queue
+        self.worker = worker
+        self.stopped = False
+        self.finishing = False
+        self.sample_rate = sample_rate
+        self.on_gap = on_gap
+        self.stats = stats if stats is not None else {"syntheticSilenceMs": 0, "realAudioMs": 0}
+
     def send_audio(self, audio: bytes) -> None:
-        self.audio_queue.put(audio)
+        if self.stopped or self.finishing:
+            return
+        with self.audio_queue.mutex:
+            pending_bytes = sum(len(item) for item in self.audio_queue.queue if item)
+        if pending_bytes + len(audio) > self.sample_rate * 2 or self.audio_queue.full():
+            self.stop()
+            if self.on_gap:
+                self.on_gap({"type": "audio_gap", "reason": "audio_buffer_overflow", "recoverable": True})
+            return
+        self.audio_queue.put_nowait(audio)
+
+    def finish(self) -> None:
+        if self.stopped or self.finishing:
+            return
+        self.finishing = True
+        self.audio_queue.put(None, timeout=0.1)
 
     def stop(self) -> None:
-        self.audio_queue.put(None)
+        if self.stopped:
+            return
+        self.stopped = True
+        while True:
+            try:
+                self.audio_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.audio_queue.put_nowait(None)
 
 
 def google_stt_v1_streaming_model(value: str | None) -> str | None:
@@ -2531,6 +2809,8 @@ class StreamingSpeechAgent(ManagedAgent):
         sample_rate: int,
         event_queue: "asyncio.Queue[dict[str, Any]]",
         loop: asyncio.AbstractEventLoop,
+        stream_id: str | None = None,
+        recognition_language: str | None = None,
     ) -> StreamingSpeechSession:
         if not self.enabled:
             raise RuntimeError("Google voice is disabled. Set GOOGLE_VOICE_ENABLED=true to enable streaming ASR.")
@@ -2543,19 +2823,23 @@ class StreamingSpeechAgent(ManagedAgent):
             raise RuntimeError("google-cloud-speech is not installed.") from exc
 
         audio_queue: "queue.Queue[bytes | None]" = queue.Queue()
-        language = os.environ.get("GOOGLE_STT_LANGUAGE", "yue-Hant-HK")
+        stats = {"syntheticSilenceMs": 0, "realAudioMs": 0}
+        language = recognition_language or os.environ.get("GOOGLE_STT_LANGUAGE", "yue-Hant-HK")
         model = google_stt_v1_streaming_model(os.environ.get("GOOGLE_STT_MODEL", ""))
 
         def audio_requests():
-            while True:
-                chunk = audio_queue.get()
-                if chunk is None:
-                    return
-                if chunk:
+            try:
+                for chunk in realtime_pcm_chunks(audio_queue, sample_rate, stats):
                     yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except AudioCaptureGap:
+                # Catch inside the iterator: gRPC otherwise wraps this as Unknown.
+                emit({"type": "audio_gap", "reason": "capture_starved", "recoverable": True})
 
         def emit(event: dict[str, Any]) -> None:
-            loop.call_soon_threadsafe(event_queue.put_nowait, event)
+            loop.call_soon_threadsafe(
+                event_queue.put_nowait,
+                {**event, "speechStreamId": stream_id} if stream_id else event,
+            )
 
         def worker() -> None:
             try:
@@ -2586,8 +2870,11 @@ class StreamingSpeechAgent(ManagedAgent):
                                 "type": "asr_final" if result.is_final else "asr_partial",
                                 "transcript": transcript,
                                 "confidence": getattr(result.alternatives[0], "confidence", None),
+                                "resultEndMs": result.result_end_time.total_seconds() * 1000,
                             }
                         )
+            except AudioCaptureGap:
+                emit({"type": "audio_gap", "reason": "capture_starved", "recoverable": True})
             except Exception as exc:
                 emit({"type": "error", "message": str(exc), "recoverable": True})
             finally:
@@ -2595,7 +2882,7 @@ class StreamingSpeechAgent(ManagedAgent):
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-        return StreamingSpeechSession(audio_queue, thread)
+        return StreamingSpeechSession(audio_queue, thread, sample_rate, emit, stats)
 
 
 class SocialWorkCoordinatorAgent(ManagedAgent):
@@ -2610,6 +2897,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         self.prompt_registry = PromptRegistry(root_dir)
         self.llm = DeepSeekClient()
         self.sessions = AgentSessionStore(root_dir)
+        self.authority = SessionAuthority(self.sessions)
         self.strategy_service = SimulationStrategyService(self.prompt_registry)
         self.student_analyzer = StudentMoveAnalyzerAgent()
         self.adaptive_policy = AdaptiveResponsePolicy()
@@ -2658,6 +2946,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "VoiceSynthesisAgent": "VoiceService.synthesis",
             "AgentSessionStore": "CaseSessionService.sessionStore",
         }
+        tts_streaming = self.voice_synthesis.streaming_capability()
         return {
             "ok": True,
             "cloudReadiness": {
@@ -2667,6 +2956,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
                 "runtimeDataRoot": str(self.root_dir / "data"),
             },
             "adkAvailable": ADK_AVAILABLE,
+            "llmExecutionBackend": "adk_runner" if os.environ.get("ADK_LLM_EXECUTION_ENABLED", "false").lower() == "true" else "direct_http",
+            "adkRunnerEnabled": os.environ.get("ADK_LLM_EXECUTION_ENABLED", "false").lower() == "true",
             "adkManagedAgents": [agent.name for agent in agents if agent.adk_managed and agent.adk_enabled],
             "llmAgents": [agent.name for agent in agents if agent.adk_managed],
             "domainServices": [
@@ -2686,7 +2977,12 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "googleSttLanguage": os.environ.get("GOOGLE_STT_LANGUAGE", "yue-Hant-HK"),
             "googleSttModel": os.environ.get("GOOGLE_STT_MODEL", "google-stt-v1-auto"),
             "googleTtsLanguage": os.environ.get("GOOGLE_TTS_LANGUAGE", "yue-HK"),
-            "googleTtsVoice": os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Chirp3-HD-Achird"),
+            "googleTtsVoice": os.environ.get("GOOGLE_TTS_VOICE", "yue-HK-Standard-D"),
+            "voiceProtocolVersion": "2",
+            "voiceTransport": "websocket-binary-pcm",
+            "captureBackend": "browser-audio-worklet",
+            "playbackBackend": "browser-audio-worklet",
+            "googleTtsStreaming": tts_streaming,
             "evidenceCardCount": self.evidence_retriever.card_count,
             "sessionStore": str(self.sessions.db_path),
             "sessionBackend": self.sessions.backend,
@@ -2708,18 +3004,19 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         return self.evidence_retriever.list_cards(filters)
 
     def start_session(self, payload: dict[str, Any]) -> dict[str, Any]:
-        case_profile = payload.get("caseProfile")
-        if not isinstance(case_profile, dict):
-            raise ValueError("caseProfile is required.")
-        return self.sessions.start_session(case_profile, payload.get("sessionId"))
+        record = self.authority.start(resolve_case(payload), payload.get('_owner', 'local-dev'), payload.get('sessionId'))
+        return session_view(record, payload.get('_role', 'instructor'))
 
     def reset_session(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.sessions.reset_session(payload.get("sessionId"), payload.get("caseProfile"))
+        if payload.get('sessionId'):
+            self.authority.close(payload['sessionId'], payload.get('_owner', 'local-dev'))
+        return self.start_session({**payload, 'sessionId': None})
 
     def export_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         session_id = payload.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("sessionId is required.")
+        self.authority.read(session_id, payload.get('_owner', 'local-dev'))
         record = self.sessions.session_record(session_id)
         trace = build_post_session_trace(record.get("events", []), [])
         return {
@@ -2729,6 +3026,27 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         }
 
     async def interview_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
+        owner = payload.get('_owner', 'local-dev')
+        sid = payload.get('sessionId')
+        if not sid:
+            sid = self.start_session(payload)['sessionId']
+        tid = payload.get('turnId') or 'turn-' + uuid.uuid4().hex
+        record, token, cached = self.authority.reserve(sid, owner, tid, payload.get('expectedStateVersion'))
+        if cached is not None:
+            return cached
+        enriched = {**payload, 'sessionId': sid, 'turnId': tid, '_token': token,
+                    '_version': record['stateVersion'], '_continuity': record['continuity'],
+                    'caseProfile': record['caseProfile'],
+                    'history': [*record['history'], {'speaker': 'student', 'text': payload.get('studentText', '')}]}
+        if payload.get('_role') == 'trainee':
+            enriched.update(simulationMethod='social_work_default', retrievalOptions={'embeddingEnabled': False})
+        try:
+            return await asyncio.wait_for(self._generate_turn(enriched), timeout=150)
+        except BaseException:
+            self.authority.fail(sid, tid, token)
+            raise
+
+    async def _generate_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
         case_profile = payload.get("caseProfile")
         student_text = payload.get("studentText")
         if not isinstance(case_profile, dict) or not isinstance(student_text, str):
@@ -2737,12 +3055,11 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
 
         agent_trace_id = f"trace-{uuid.uuid4().hex[:16]}"
         session_id = payload.get("sessionId") or f"case-{case_profile.get('id', 'default')}"
-        self.sessions.start_session(case_profile, session_id)
 
         history = payload.get("history") if isinstance(payload.get("history"), list) else []
         student_analysis = self.student_analyzer.run(student_text)
         prior_events = self.sessions.recent_events(session_id)
-        session_continuity = build_session_continuity(case_profile, history, prior_events, student_analysis)
+        session_continuity = build_session_continuity(case_profile, history, [], student_analysis, previous=payload.get('_continuity'))
         simulation_strategy = self.strategy_service.run(
             payload.get("simulationMethod"),
             case_profile,
@@ -2754,7 +3071,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         grounding_profile = load_active_grounding_profile(self.root_dir, case_profile)
         pie_context = summarize_pie_context(grounding_profile, case_profile)
         retrieval_options = payload.get("retrievalOptions") if isinstance(payload.get("retrievalOptions"), dict) else {}
-        cards = self.evidence_retriever.run(
+        cards = await asyncio.to_thread(self.evidence_retriever.run,
             case_profile,
             student_text,
             history,
@@ -2777,15 +3094,32 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
             "retrievedCards": cards,
             "evidenceSummary": evidence_summary,
         }
+        if reaction_planning.enabled():
+            enriched["recentReactionPlans"] = [
+                event.get("payload", event).get("clientResponse", {}).get("reactionPlan")
+                for event in prior_events
+                if isinstance(event.get("payload", event).get("clientResponse", {}).get("reactionPlan"), dict)
+            ][-3:]
+        generation_started = time.monotonic()
         response = await self.client_simulator.run(enriched)
         response = await self.realism_scorer.run(enriched, response)
+        if reaction_planning.enabled():
+            import logging
+            logging.getLogger(__name__).info(
+                "reaction_plan version=%s trace=%s mode=%s repair=%s elapsed_ms=%d",
+                reaction_planning.VERSION, agent_trace_id, response["reactionPlan"]["responseMode"],
+                bool(response.get("realismAssessment", {}).get("repairApplied")),
+                int((time.monotonic() - generation_started) * 1000),
+            )
         response["evidenceSummary"] = evidence_summary
         response["simulationMethod"] = simulation_strategy["simulationMethod"]
         response["simulationStrategySnapshot"] = simulation_strategy
-        response = self.safety_reviewer.run(response, case_profile, response_language_value)
+        safety_checked = self.safety_reviewer.run(response, case_profile, response_language_value)
+        if safety_checked.get("safetyFlags"):
+            raise ValueError("Client safety validation failed; retry the turn.")
+        response = safety_checked
         response["riskSignals"] = unique_strings([
             *client_disclosed_risk_signals(response, case_profile.get("caseType")),
-            *(["safety_review_repaired"] if "safety_review_repaired" in response.get("riskSignals", []) else []),
         ])
         safety_hint = safety_hint_for_response(response)
         if safety_hint:
@@ -2797,6 +3131,8 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         response["profileGroundingSnapshot"] = summarize_grounding_profile(grounding_profile)
         response["pieContextSnapshot"] = pie_context
         response = self.avatar_director.run(response, case_profile, student_analysis)
+        require_spoken_text(response)
+        response["avatarDirective"]["ttsText"] = response["clientText"]
         if response.get("evidenceSummary"):
             response["evidenceSummary"]["riskSignals"] = normalize_risk_signals(
                 response["evidenceSummary"].get("riskSignals", []),
@@ -2805,7 +3141,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         response["agentTraceId"] = agent_trace_id
 
         next_case = self.case_state.apply_response(case_profile, response)
-        updated_continuity = build_session_continuity(case_profile, history, prior_events, student_analysis, response, adaptive_policy)
+        updated_continuity = build_session_continuity(case_profile, history, [], student_analysis, response, adaptive_policy, previous=payload.get('_continuity'))
         response["disclosureLedger"] = build_disclosure_ledger(case_profile, response)
         response["progressionEvidence"] = {
             "stage": updated_continuity.get("currentIssueStage", adaptive_policy.get("progressionStage", "initial_contact")),
@@ -2817,11 +3153,7 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         response["contextConsistencyAssessment"] = assess_context_consistency(enriched, response)
         response["profileGroundingSnapshot"] = summarize_grounding_profile(grounding_profile)
         response["pieContextSnapshot"] = pie_context
-        self.sessions.append_event(
-            session_id,
-            agent_trace_id,
-            "interview_turn",
-            {
+        event = {
                 "caseProfile": next_case,
                 "studentAnalysis": student_analysis,
                 "adaptivePolicy": adaptive_policy,
@@ -2832,9 +3164,14 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
                 "evidenceSummary": evidence_summary,
                 "clientResponse": response,
                 "studentText": student_text,
-            },
-        )
-        return response
+            }
+        if payload.get('responseId'):
+            response['responseId'] = payload['responseId']
+        state = {'caseProfile': next_case, 'continuity': updated_continuity,
+                 'history': [*history, {'speaker': 'client', 'text': response['clientText'],
+                                      'revealedFacts': response['revealedFacts']}]}
+        return self.authority.commit(session_id, payload.get('_owner', 'local-dev'), payload['turnId'],
+                                     payload['_token'], payload['_version'], state, response, event)
 
     async def supervisor_review(self, payload: dict[str, Any]) -> dict[str, Any]:
         case_profile = payload.get("caseProfile")
@@ -2856,8 +3193,9 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
 
     async def final_review(self, payload: dict[str, Any]) -> dict[str, Any]:
         session_id = payload.get("sessionId")
-        case_profile = payload.get("caseProfile")
-        history = payload.get("history") if isinstance(payload.get("history"), list) else []
+        record = self.authority.read(session_id, payload.get('_owner', 'local-dev'))
+        case_profile = record['caseProfile']
+        history = record['history']
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("sessionId is required for final-review.")
         if not isinstance(case_profile, dict):
@@ -2865,6 +3203,11 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
         events = self.sessions.session_events(session_id)
         if not events and not history:
             raise ValueError("No session trace is available for final-review.")
+        self.authority.close(session_id, payload.get('_owner', 'local-dev'))
+        existing = next((e.get('payload', {}).get('report') for e in reversed(events)
+                         if e.get('eventType', e.get('event_type')) == 'post_session_supervisor_report'), None)
+        if existing:
+            return existing
         trace = build_post_session_trace(events, history)
         hk_pcf_seed = build_hk_pcf_assessment(case_profile, trace)
         grounding_profile = load_active_grounding_profile(self.root_dir, case_profile)
@@ -2896,13 +3239,44 @@ class SocialWorkCoordinatorAgent(ManagedAgent):
     def synthesize_tts(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.voice_synthesis.synthesize(payload)
 
+    def start_tts_stream(
+        self,
+        payload: dict[str, Any],
+        event_queue: "asyncio.Queue[dict[str, Any]]",
+        loop: asyncio.AbstractEventLoop,
+        response_id: str,
+    ) -> StreamingTtsSession:
+        return self.voice_synthesis.start_stream(payload, event_queue, loop, response_id)
+
+    def record_voice_delivery(
+        self,
+        session_id: str | None,
+        response_id: str | None,
+        status: str,
+        utterance_id: str | None = None,
+    ) -> None:
+        if not session_id or not response_id:
+            return
+        self.sessions.append_event(
+            session_id,
+            f"voice-{response_id}",
+            "voice_delivery",
+            {
+                "responseId": response_id,
+                "utteranceId": utterance_id,
+                "deliveryStatus": status,
+            },
+        )
+
     def start_speech_stream(
         self,
         sample_rate: int,
         event_queue: "asyncio.Queue[dict[str, Any]]",
         loop: asyncio.AbstractEventLoop,
+        stream_id: str | None = None,
+        recognition_language: str | None = None,
     ) -> StreamingSpeechSession:
-        return self.streaming_speech.start_stream(sample_rate, event_queue, loop)
+        return self.streaming_speech.start_stream(sample_rate, event_queue, loop, stream_id, recognition_language)
 
 
 def build_session_continuity(
@@ -2912,6 +3286,7 @@ def build_session_continuity(
     current_analysis: dict[str, bool] | None = None,
     current_response: dict[str, Any] | None = None,
     current_policy: dict[str, Any] | None = None,
+    previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     trust = clamp_float(case_profile.get("psychologicalState", {}).get("clientOpenness", 0), 0, 10)
     trust_trajectory: list[float] = []
@@ -2924,6 +3299,17 @@ def build_session_continuity(
     current_issue_stage = "initial_contact"
     recent_semantic_fingerprints: list[str] = []
     stage_transition_history: list[str] = []
+    if previous:
+        trust_trajectory = list(previous.get('trustTrajectory', []))
+        rupture_events = list(previous.get('ruptureEvents', []))
+        repair_attempts = list(previous.get('repairAttempts', []))
+        disclosed = list(previous.get('disclosedFactIds', []))
+        avoided_topics = list(previous.get('avoidedTopics', []))
+        recurring_patterns = list(previous.get('recurringLanguagePatterns', []))
+        current_issue_stage = previous.get('currentIssueStage', 'initial_contact')
+        recent_semantic_fingerprints = list(previous.get('recentSemanticFingerprints', []))
+        stage_transition_history = list(previous.get('stageTransitionHistory', []))
+        events = []
 
     def remember_stage(stage_value: Any, reason_value: Any = None) -> None:
         nonlocal current_issue_stage
@@ -3286,6 +3672,8 @@ def build_client_prompt(payload: dict[str, Any]) -> str:
         evidence_card_prompt_signal(card)
         for card in payload.get("retrievedCards", [])
     ]
+    if reaction_planning.enabled():
+        return reaction_planning.prompt(payload, json_shape, evidence_for_prompt)
     avoid_recent_patterns = recent_response_patterns(history, case_profile.get("caseType"))
 
     return f"""
@@ -3418,6 +3806,12 @@ def score_client_realism(payload: dict[str, Any], response: dict[str, Any]) -> d
     ]
     repeated_response = any(is_repeated_client_text(text, previous) for previous in recent_client_texts)
     semantic_repeat = semantic_repeat_risk(text, recent_client_texts, case_type)
+    if reaction_planning.enabled() and payload.get("recentReactionPlans"):
+        plan = response.get("reactionPlan") or {}
+        previous = payload["recentReactionPlans"][-1]
+        same_focus = all(plan.get(key) == previous.get(key) for key in ("responseMode", "focusFactIds", "followUpTopicId"))
+        # Exact/near text repeats still fail independently; topic continuation alone does not.
+        semantic_repeat = semantic_repeat and same_focus
     recent_avoidance_count = sum(1 for previous in recent_client_texts[-3:] if is_empty_avoidance_response(previous))
     current_empty_avoidance = is_empty_avoidance_response(text)
     progression_metrics = assess_progression_fit(payload, response, current_empty_avoidance, recent_avoidance_count)
@@ -3784,6 +4178,15 @@ def round_score(value: float) -> float:
 
 
 def build_realism_repair_prompt(payload: dict[str, Any], response: dict[str, Any], assessment: dict[str, Any]) -> str:
+    if reaction_planning.enabled():
+        # Reuse the same allowlisted context; never reintroduce full grounding during repair.
+        shape = DEFAULT_PROMPT_REGISTRY.client_prompt().get("jsonShape", {})
+        return reaction_planning.prompt(payload, shape,
+            [evidence_card_prompt_signal(card) for card in payload.get("retrievedCards", [])],
+            {"candidate": response, "errors": {
+                key: assessment.get(key) for key in ("reactionPlanValidation", "reactionSafetyFlags",
+                    "spokenTextValidation", "semanticRepeatRisk", "avoidanceOveruseRisk", "overDisclosureRisk")
+            }})
     case_profile = payload.get("caseProfile", {})
     language = response_language(payload)
     repair_registry = DEFAULT_PROMPT_REGISTRY.realism_repair()
@@ -5029,9 +5432,19 @@ def context_expression_policy(
         label = "Context Expression：退縮基準"
         signals = unique_strings([f"affect:{affect}", f"baseline:{case_baseline or 'unknown'}", *matched_anchors[:3]])
 
+    if reaction_planning.enabled() and response.get("reactionPlanValidation", {}).get("valid") and not high_risk:
+        template_id = {
+            "defensive": "defensive_micro", "irritated": "defensive_micro", "ashamed": "ashamed_downcast",
+            "withdrawn": "ashamed_downcast", "sad": "ashamed_downcast", "anxious": "anxious_tension",
+            "reflective": "reflective_soft", "neutral": "neutral_listening",
+        }[affect]
+        rule_id, label = "validated_reaction_expression", "反應計劃表情"
+        signals = [f"affect:{affect}"]
     template = EXPRESSION_TEMPLATES[template_id]
     min_intensity, max_intensity = template["intensityRange"]
     expression_intensity = round(min(max_intensity, max(min_intensity, intensity)), 2)
+    if reaction_planning.enabled() and response.get("reactionPlanValidation", {}).get("valid"):
+        expression_intensity = min(expression_intensity, intensity)
     if high_risk:
         expression_intensity = round(min(expression_intensity, 0.5), 2)
 
@@ -5336,6 +5749,22 @@ def avatar_behavior_policy(
     if motion != model_motion:
         overridden["motionCue"] = model_motion
 
+    validated_plan = response.get("reactionPlan") if reaction_planning.enabled() and response.get("reactionPlanValidation", {}).get("valid") else None
+    if validated_plan:
+        if not high_risk:
+            affect = validated_plan["emotion"]
+            motion = motion_for_affect(affect)
+        intensity = min(validated_plan["intensity"], 0.35 if high_risk else 0.65)
+        basis = [item for item in basis if item.get("sourceType") == "safety" or item.get("ruleId") == "safety_low_intensity"]
+        basis.append({"ruleId": "validated_reaction_plan", "label": "反應計劃", "sourceType": "rule",
+                      "signals": [f"affect:{affect}"], "rationale": "已校驗反應決定表情及低幅動作；安全限制優先。"})
+        rupture = bool(student_analysis.get("mockingOrDismissive") or student_analysis.get("judgmentalOrDirective")
+                       or student_analysis.get("doubtOrInvalidating"))
+        if rupture and not high_risk:
+            basis.append({"ruleId": "mocked_or_dismissed_recoil", "label": "關係破裂反應", "sourceType": "rule",
+                          "signals": ["rupture"], "rationale": "本輪冒犯允許短暫反應，表情仍跟隨已校驗計劃。"})
+        transition_ms = 1000 if high_risk or affect in {"withdrawn", "sad", "ashamed"} else 450 if rupture else 700
+        hold_ms = 3000 if high_risk else 2500
     performance_plan = avatar_performance_plan(
         case_type=case_type,
         affect=affect,
@@ -5345,6 +5774,21 @@ def avatar_behavior_policy(
         basis=basis,
         transition_ms=transition_ms,
     )
+    if validated_plan:
+        strong = bool(student_analysis.get("mockingOrDismissive") or student_analysis.get("judgmentalOrDirective")
+                      or student_analysis.get("doubtOrInvalidating")) and not high_risk
+        performance_plan["idleMixOnly"] = not strong
+        performance_plan["motionEnergy"] = "medium" if strong else "low"
+        performance_plan["reactionReason"] = "rupture" if strong else "engagement"
+        if strong:
+            performance_plan["reactionFamily"] = "defensive"
+        if high_risk:
+            performance_plan["reactionReason"] = "risk"
+        if not strong:
+            motion = "look_down" if high_risk or affect in {"withdrawn", "sad", "ashamed"} else "neutral"
+            performance_plan["reactionClipId"] = None
+            performance_plan["clipSequence"] = [performance_plan["baselineClipId"]]
+        performance_plan["motionScale"] = min(performance_plan["motionScale"], intensity)
     expression_policy = context_expression_policy(
         response=response,
         case_profile=case_profile,
@@ -5575,21 +6019,6 @@ def avatar_performance_plan(
         "attackMs": max(180, min(transition_ms, 520)),
         "releaseCurve": release_curve,
     }
-
-
-def safe_repair_text(case_profile: dict[str, Any], response: dict[str, Any], language: str = "cantonese") -> str:
-    case_type = case_profile.get("caseType")
-    if language == "english":
-        if case_type == "substance_recovery_meth":
-            return "I can say I'm scared of withdrawal and relapsing, but I don't want to get into specific details. What I need right now is help finding safer support."
-        if case_type == "student_depression_bullying":
-            return "I don't want to describe it too specifically because that scares me. But sometimes the thought does come up, and I need someone to help me check whether I'm safe right now."
-        return "I don't want to go into specific details, but I really feel like I'm not coping. I don't know who I can talk to without making everything feel bigger."
-    if case_type == "substance_recovery_meth":
-        return "我可以講到我好驚戒斷同復發，但啲太具體嘅做法我唔想講。其實我而家最需要係有人幫我搵一個安全啲嘅支援方法。"
-    if case_type == "student_depression_bullying":
-        return "我唔想講到太具體，因為我自己都驚。但我可以講，有時個念頭會出現，我需要有人陪我確認而家係咪安全。"
-    return "我唔想講太具體嘅細節，但我而家真係有啲頂唔順。我又唔知可以同邊個講，驚一講件事就會搞到更大。"
 
 
 def next_simulator_stage(case_profile: dict[str, Any], response: dict[str, Any]) -> str:

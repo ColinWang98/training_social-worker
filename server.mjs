@@ -85,7 +85,8 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (!authenticateRequest(req).ok) {
+  const authResult = authenticateRequest(req);
+  if (!authResult.ok) {
     socket.write(
       'HTTP/1.1 401 Unauthorized\r\n' +
         'WWW-Authenticate: Basic realm="Social Work Avatar Lab"\r\n' +
@@ -95,6 +96,7 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
+  req.authUser = authResult.user;
   proxyWebSocketUpgrade(req, socket, head);
 });
 
@@ -197,6 +199,8 @@ async function proxyRequest(req, res, targetPath) {
   const body = await readRawBody(req);
   const headers = {
     'Content-Type': req.headers['content-type'] ?? 'application/json',
+    'X-App-Role': req.authUser?.role ?? 'trainee',
+    'X-App-Subject': Buffer.from(req.authUser?.username ?? 'anonymous').toString('base64url'),
   };
 
   try {
@@ -270,6 +274,10 @@ function nodeReadiness() {
     secureCookie: authConfig.secureCookie,
     adkServiceUrl,
     voiceWebSocketProxy: '/api/voice-stream',
+    voiceProtocolVersion: '2',
+    voiceTransport: 'websocket-binary-pcm',
+    captureBackend: 'browser-audio-worklet',
+    playbackBackend: 'browser-audio-worklet',
     vadAssetsServedFrom: '/vad/',
     cloudRuntime: {
       flyAppName: process.env.FLY_APP_NAME ?? null,
@@ -292,10 +300,12 @@ function proxyWebSocketUpgrade(req, socket, head) {
     for (let index = 0; index < req.rawHeaders.length; index += 2) {
       const name = req.rawHeaders[index];
       const value = req.rawHeaders[index + 1];
-      if (name.toLowerCase() !== 'host') {
+      if (!['host', 'x-app-role', 'x-app-subject'].includes(name.toLowerCase())) {
         headerLines.push(`${name}: ${value}`);
       }
     }
+    headerLines.push(`X-App-Role: ${req.authUser?.role ?? 'trainee'}`);
+    headerLines.push(`X-App-Subject: ${Buffer.from(req.authUser?.username ?? 'anonymous').toString('base64url')}`);
     upstream.write(`${headerLines.join('\r\n')}\r\n\r\n`);
     if (head.length > 0) upstream.write(head);
     socket.pipe(upstream);

@@ -179,6 +179,7 @@ export type AvatarPerformancePlan = {
 };
 
 export type ClientRealismAssessment = {
+  spokenTextValidation?: { valid: boolean; reasons: string[] };
   realismScore: number;
   consistencyScore: number;
   disclosureFitScore: number;
@@ -438,10 +439,29 @@ export type InterviewTurn = {
   timestamp: string;
   revealedFacts?: string[];
   disclosureLedger?: DisclosureLedgerEntry[];
+  responseId?: string;
+  deliveryStatus?: 'completed' | 'interrupted' | 'cancelled';
   scoreSnapshot?: Partial<ScoreSnapshot>;
 };
 
 export type ClientResponse = {
+  turnId?: string;
+  responseId?: string;
+  sessionId?: string;
+  stateVersion?: number;
+  deliveryStatus?: 'completed' | 'interrupted' | 'cancelled';
+  sessionView?: CaseProfile;
+  reactionPlan?: {
+    interactionIntent: 'acknowledge' | 'cautious_exploration' | 'set_boundary' | 'express_discomfort' | 'limited_cooperation';
+    emotion: AffectLabel;
+    intensity: number;
+    responseMode: 'brief_answer' | 'limited_elaboration' | 'clarification' | 'boundary_expression' | 'partial_answer';
+    focusFactIds: string[];
+    disclosureIntent: 'none' | 'surface_cue' | 'concrete_context' | 'sensitive_cue';
+    followUpTopicId: string | null;
+  };
+  reactionPlanValidation?: { valid: boolean; errors: string[]; version: string };
+  spokenTextValidation?: { valid: boolean; reasons: string[] };
   clientText: string;
   simulationMethod?: SimulationMethod;
   affect: AffectLabel;

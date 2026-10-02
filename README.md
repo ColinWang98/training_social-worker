@@ -6,6 +6,16 @@ This project is a teaching and research prototype. It is not a diagnostic tool, 
 
 ## 中文说明
 
+### 连续语音与纯台词输出
+
+服务对象文字和 TTS 只使用通过检查的口语台词。动作旁白进入现有一次 LLM repair；仍不合格则返回可重试错误，不写入服务对象回复或推进个案。
+
+切句由后端 `VoiceTurnManager` 统一管理：VAD 结束后等待约 900ms，缺少 final 时使用稳定 partial 并轮换识别流；旧流迟到结果不产生新一轮。麦克风短暂断流最多补两秒静音，持续中断会显示恢复/重新连接，而不会一直假装正在聆听。英文模式的 STT 使用 `en-US`，粤语使用 `yue-Hant-HK`。
+
+离线回归：`npm run voice:boundary:test`、`npm run voice:client:test`、`npm run voice:queue:test`、`npm run client:spoken:test`、`npm run voice:stream:test`。这些测试不调用付费模型。
+
+云端验收需真实麦克风：粤语和英文各连续 10 轮；包含重复说同一句、插话、停止后重开及一次短暂断网。记录重复提交、漏句、恢复状态与延迟；离线测试不能替代这项验收。
+
 这是一个本地优先的社工访谈训练原型，用于模拟服务对象访谈，而不是提供诊断、治疗、危机介入或官方社工资格评核。
 
 核心能力：
@@ -100,6 +110,19 @@ GOOGLE_TTS_RATE_VARIATION_ENABLED=true
 GOOGLE_VOICE_ENABLED=true
 ```
 
+语音链路使用内部 realtime v2 生命周期：浏览器优先通过 AudioWorklet 发送 16 kHz mono Int16 binary PCM，服务端以 `utteranceId`、`responseId` 和递增 `sequence` 管理连续识别、去重、恢复与打断。旧版 base64 JSON 音频事件仍保留兼容。默认整段 TTS 继续使用稳定的 Standard-D/Wavenet-D，并由本地 Rhubarb 生成嘴型时间线。
+
+Google Chirp 3 HD streaming TTS 是可选试运行能力，默认关闭：
+
+```bash
+GOOGLE_TTS_STREAMING_ENABLED=false
+GOOGLE_TTS_STREAMING_YUE_VOICE=yue-HK-Chirp3-HD-Achird
+GOOGLE_TTS_STREAMING_EN_VOICE=en-US-Chirp3-HD-Charon
+GOOGLE_TTS_STREAMING_SAMPLE_RATE=24000
+```
+
+开启后，音频小段会通过同一 WebSocket 逐步返回；如能力检查或调用失败，同一回应只回退一次 Standard TTS。粤语 streaming voice 属预览能力，因此不应直接取代默认路径。
+
 如需基于音频的嘴型时间线，可启用 Rhubarb：
 
 ```bash
@@ -113,6 +136,10 @@ RHUBARB_TIMEOUT_MS=2500
 
 ```bash
 npm run build
+npm run voice:machine:test
+npm run voice:audio:test
+npm run voice:stream:test
+npm run voice:tts-stream:test
 npm run avatar:expression:test
 npm run avatar:motion:test
 npm run avatar:lip:test
@@ -310,7 +337,7 @@ fly secrets set EMBEDDING_SQLITE_RESTORE_URL='https://private.example/embeddings
 
 `/api/health` reports `corpusReadiness.status`, manifest version, expected sizes, and whether restore is required. The service may run in an explicit degraded seed mode when the required corpus is absent.
 
-Anyone with a valid password can access the same prototype. The in-app trainee/instructor toggle is still a UI mode, not role-based authorization.
+Accounts may be assigned `trainee` or `instructor` roles. Instructor routes and APIs are checked by the server; the in-app display mode alone does not grant instructor access. Accounts still share the prototype's training data and are not isolated into per-user workspaces.
 
 ## Optional Google Voice
 
@@ -329,6 +356,17 @@ GOOGLE_TTS_EN_VOICE=en-US-Wavenet-D
 GOOGLE_TTS_EN_MALE_VOICES=en-US-Wavenet-D,en-US-Neural2-D,en-US-Standard-D,en-US-Chirp3-HD-Charon
 GOOGLE_TTS_RATE_VARIATION_ENABLED=true
 GOOGLE_VOICE_ENABLED=true
+```
+
+The browser and sidecar negotiate the internal realtime voice protocol v2. AudioWorklet sends 16 kHz mono Int16 binary PCM; ordered `utteranceId`, `responseId`, and `sequence` fields prevent stale recognition events from replacing a newer utterance. The stable default remains whole-response Standard-D/Wavenet-D audio with Rhubarb lip-sync.
+
+Optional Chirp 3 HD streaming TTS is feature-flagged and disabled by default:
+
+```bash
+GOOGLE_TTS_STREAMING_ENABLED=false
+GOOGLE_TTS_STREAMING_YUE_VOICE=yue-HK-Chirp3-HD-Achird
+GOOGLE_TTS_STREAMING_EN_VOICE=en-US-Chirp3-HD-Charon
+GOOGLE_TTS_STREAMING_SAMPLE_RATE=24000
 ```
 
 For audio-aligned mouth movement, enable local Rhubarb lip-sync. Docker/Fly builds install Rhubarb at `/opt/rhubarb/rhubarb`; local development can use any downloaded Rhubarb binary:
@@ -370,6 +408,9 @@ Run checks:
 ```bash
 npm run build
 npm run voice:machine:test
+npm run voice:audio:test
+npm run voice:stream:test
+npm run voice:tts-stream:test
 npm run adk:smoke
 npm run smoke:sessions
 ```
@@ -504,3 +545,45 @@ Do not publish raw corpus text, private session logs, API keys, or Google creden
 - Optional Supabase import exists for database experiments, but the default prototype is local-first.
 - HK PCF output is a training rubric aligned with local practice concepts. It is not an official SWRB certification or registration assessment.
 - Project source code is MIT-licensed; external assets and datasets remain subject to their own terms.
+# PatientAct-inspired reaction planning / 反應規劃
+
+`CLIENT_REACTION_PLAN_ENABLED=false` is the default. Set it on the **server** to
+enable a single completion containing a compact `reactionPlan` and spoken dialogue.
+This is inspired by [PatientAct](https://arxiv.org/html/2608.12750v2), not a reproduction
+of its independent reaction/behavior pipeline or a clinically validated assessment.
+
+新路徑使用五個現有個案的 fact ID、主題及透露級別白名單；未知 fact 預設不解鎖。
+完整 persona、事件及 grounding 不再直接進入此路徑的生成／repair prompt，避免繞過透露限制。
+改用轉介摘要、抽象個案邏輯、已允許資料與本次訪談歷史。計劃只是意圖，不會自動標記 revealedFacts。
+這是有意的保守邊界，可能減少個案細節，必須做人工比較而非假定真實度必然提高。
+
+The existing single repair budget also covers plan/schema, spoken-text and safety
+errors. Invalid repaired responses fail before case-state updates and TTS; no canned
+dialogue replacement is used in the enabled path. Instructor responses include the
+plan and validation, while trainee HTTP/WebSocket serialization removes them.
+Node overwrites the role header after authentication; ADK must remain private/loopback,
+not exposed directly to the Internet. This is not per-user session ownership.
+
+- Offline regression: `npm run client:reaction:test` (no provider calls).
+- Explicit paid comparison: `npm run evaluate:reaction -- --allow-paid` (80 synthetic
+  turns, plus at most one repair per turn; no Google TTS). Reports are private under
+  `data/reports/reaction-plans/`, with isolated temporary evaluation session storage.
+- Enable on Fly only after tests, paid comparison and human review: no more repetition
+  or empty avoidance, no loss of continuity/topic specificity, and p95 latency increase
+  no greater than 15%. The small benchmark is a regression check, not scientific validation.
+- Roll back by setting `CLIENT_REACTION_PLAN_ENABLED=false`. Existing training records
+  remain intact; no corpus rebuild or cross-session memory is introduced.
+
+# ADK Runner execution / ADK Runner 呼叫路徑
+
+Model execution remains on the existing direct DeepSeek HTTP path by default.
+`ADK_LLM_EXECUTION_ENABLED=true` opts the server into one ephemeral Google ADK
+`Runner` invocation per structured completion. It does not persist model history,
+and a failed Runner call is returned as an error rather than retried through direct
+HTTP (avoiding duplicate provider charges). Keep the flag off until the explicit
+provider-backed comparison and cancellation review are approved.
+
+預設仍使用現有 DeepSeek 直連。只有在服務端設定
+`ADK_LLM_EXECUTION_ENABLED=true` 才會改由 ADK `Runner` 執行單次結構化呼叫；
+不保存跨回合模型記憶，失敗亦不會自動改走直連重試。未完成付費對照及取消行為
+驗收前，請保持關閉。

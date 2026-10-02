@@ -16,6 +16,8 @@ import type { AvatarBlendshapeDebug, AvatarMotionDebug, VoiceTimingDebug } from 
 import { caseDisplay, motionPrompt, observableLabel, t } from '../lib/i18n';
 
 type CasePanelProps = {
+  reactionPlan?: ClientResponse['reactionPlan'];
+  reactionPlanValidation?: ClientResponse['reactionPlanValidation'];
   caseProfile: CaseProfile;
   caseProfiles: CaseProfile[];
   evidenceSummary: EvidenceSummary | null;
@@ -52,6 +54,8 @@ type CasePanelProps = {
 export type InstructorTab = 'session' | 'case' | 'retrieval' | 'avatar';
 
 export function CasePanel({
+  reactionPlan,
+  reactionPlanValidation,
   caseProfile,
   caseProfiles,
   evidenceSummary,
@@ -474,21 +478,45 @@ export function CasePanel({
                   <DirectiveItem label="Connect" value={msValue(voiceTimingDebug.connectionOpenMs)} />
                   <DirectiveItem label="Ready" value={msValue(voiceTimingDebug.listeningReadyMs)} />
                   <DirectiveItem label="First partial" value={msValue(voiceTimingDebug.firstPartialMs)} />
+                  <DirectiveItem label="Speech → partial" value={deltaMs(voiceTimingDebug.utteranceFirstPartialMs, voiceTimingDebug.speechStartedMs)} />
                   <DirectiveItem label="Last partial" value={msValue(voiceTimingDebug.lastPartialMs)} />
                   <DirectiveItem label="ASR final" value={msValue(voiceTimingDebug.asrFinalMs)} />
+                  <DirectiveItem label="Speech end → final" value={deltaMs(voiceTimingDebug.asrFinalMs, voiceTimingDebug.speechEndMs)} />
                   <DirectiveItem label="Commit request" value={msValue(voiceTimingDebug.commitRequestedMs)} />
                   <DirectiveItem label="Commit" value={msValue(voiceTimingDebug.committedMs)} />
                   <DirectiveItem label="Turn started" value={msValue(voiceTimingDebug.turnStartedMs)} />
                   <DirectiveItem label="Client response" value={msValue(voiceTimingDebug.clientResponseMs)} />
+                  <DirectiveItem label="Final → response" value={deltaMs(voiceTimingDebug.clientResponseMs, voiceTimingDebug.asrFinalMs)} />
                   <DirectiveItem label="TTS ready" value={msValue(voiceTimingDebug.ttsReadyMs)} />
                   <DirectiveItem label="Audio play" value={msValue(voiceTimingDebug.audioPlayStartMs)} />
+                  <DirectiveItem label="Response → audio" value={deltaMs(voiceTimingDebug.audioPlayStartMs, voiceTimingDebug.clientResponseMs)} />
                   <DirectiveItem label="Server elapsed" value={msValue(voiceTimingDebug.lastServerElapsedMs)} />
                   <DirectiveItem label="State" value={voiceTimingDebug.voiceState} />
+                  <DirectiveItem label="Stream epoch" value={String(voiceTimingDebug.streamEpoch ?? 0)} />
+                  <DirectiveItem label="Late results discarded" value={String(voiceTimingDebug.lateResultsDiscarded ?? 0)} />
+                  <DirectiveItem label="Capture context" value={voiceTimingDebug.capture?.contextState ?? 'n/a'} />
+                  <DirectiveItem label="Server last audio" value={msValue(voiceTimingDebug.capture?.lastReceivedAgeMs ?? undefined)} />
+                  <DirectiveItem label="Real audio" value={msValue(voiceTimingDebug.capture?.realAudioMs)} />
+                  <DirectiveItem label="Silence padding" value={msValue(voiceTimingDebug.capture?.syntheticSilenceMs)} />
+                  <DirectiveItem label="Last capture" value={msValue(voiceTimingDebug.capture?.lastCaptureAgeMs)} />
+                  <DirectiveItem label="Last sent" value={msValue(voiceTimingDebug.capture?.lastSentAgeMs ?? undefined)} />
+                  <DirectiveItem label="Buffered bytes" value={String(voiceTimingDebug.capture?.bufferedBytes ?? 0)} />
+                  <DirectiveItem label="Recovery" value={voiceTimingDebug.recoveryReason ?? 'none'} />
                   <DirectiveItem label="VAD" value={voiceTimingDebug.vadStatus} />
                   <DirectiveItem label="VAD event" value={voiceTimingDebug.vadLastEvent ?? 'n/a'} />
                   <DirectiveItem label="Commit reason" value={voiceTimingDebug.lastCommitReason ?? 'n/a'} />
                   <DirectiveItem label="Restarts" value={`${voiceTimingDebug.streamRestartCount}`} />
                   <DirectiveItem label="Barge-in" value={`${voiceTimingDebug.bargeInCount}`} />
+                  <DirectiveItem label="Barge stop" value={msValue(voiceTimingDebug.bargeInStopMs)} />
+                  <DirectiveItem label="Protocol" value={voiceTimingDebug.protocolVersion ?? 'legacy'} />
+                  <DirectiveItem label="Capture" value={voiceTimingDebug.captureBackend ?? 'n/a'} />
+                  <DirectiveItem label="Playback" value={voiceTimingDebug.playbackBackend ?? 'n/a'} />
+                  <DirectiveItem label="Streaming TTS" value={voiceTimingDebug.streamingTts ? 'on' : 'off'} />
+                  <DirectiveItem label="Underruns" value={`${voiceTimingDebug.playbackUnderruns}`} />
+                  <DirectiveItem label="Stream" value={voiceTimingDebug.streamId ?? 'n/a'} />
+                  <DirectiveItem label="Utterance" value={voiceTimingDebug.utteranceId ?? 'n/a'} />
+                  <DirectiveItem label="Response" value={voiceTimingDebug.responseId ?? 'n/a'} />
+                  <DirectiveItem label="Degraded" value={voiceTimingDebug.degradedReason ?? 'none'} />
                   <DirectiveItem label="Transcript chars" value={`${voiceTimingDebug.lastTranscriptLength}`} />
                   <DirectiveItem label="State log" value={voiceTimingDebug.stateTransitionLog.slice(-4).join(' → ') || 'n/a'} />
                 </div>
@@ -557,11 +585,25 @@ export function CasePanel({
                 <TagRow label="最近動作" values={avatarMotionDebug.recentMotionHistory} />
               </div>
             )}
+            {viewMode === 'instructor' && reactionPlan && (
+              <section>
+                <h3>{uiLanguage === 'english' ? 'Reaction plan' : '本輪反應計劃'}</h3>
+                <div className="avatarDirectiveGrid">
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Intent / mode' : '意圖 / 回應方式'} value={`${reactionPlan.interactionIntent} / ${reactionPlan.responseMode}`} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Emotion / intensity' : '情緒 / 強度'} value={`${reactionPlan.emotion} / ${reactionPlan.intensity}`} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Topic' : '可追問主題'} value={reactionPlan.followUpTopicId ?? '-'} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Disclosure intent' : '透露意圖（不代表已透露）'} value={reactionPlan.disclosureIntent} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Planned facts' : '擬用資料'} value={reactionPlan.focusFactIds.join(', ') || '-'} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Validation' : '校驗'} value={reactionPlanValidation?.valid ? 'passed' : reactionPlanValidation?.errors.join(', ') || 'n/a'} />
+                </div>
+              </section>
+            )}
             {realismAssessment && (
               <div className="realismBox" aria-label="被試真實度評估">
                 <h3>被試真實度</h3>
                 <div className="avatarDirectiveGrid">
                   <DirectiveItem label="整體" value={`${realismAssessment.realismScore.toFixed(1)}/10`} />
+                  <DirectiveItem label={uiLanguage === 'english' ? 'Spoken dialogue' : '純台詞檢查'} value={realismAssessment.spokenTextValidation?.valid ? 'passed' : 'n/a'} />
                   <DirectiveItem label="連續性" value={`${realismAssessment.consistencyScore.toFixed(1)}/10`} />
                   <DirectiveItem label="透露適配" value={`${realismAssessment.disclosureFitScore.toFixed(1)}/10`} />
                   <DirectiveItem label={uiLanguage === 'english' ? 'Language naturalness' : '語言自然度'} value={`${realismAssessment.languageNaturalnessScore.toFixed(1)}/10`} />
@@ -1202,4 +1244,9 @@ function TagRow({ label, values }: { label: string; values: string[] }) {
 
 function msValue(value?: number) {
   return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}ms` : 'n/a';
+}
+
+function deltaMs(end?: number, start?: number) {
+  if (typeof end !== 'number' || typeof start !== 'number') return 'n/a';
+  return msValue(Math.max(0, end - start));
 }

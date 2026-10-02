@@ -100,7 +100,7 @@ export function InterviewPanel({
             <span className={`voiceStatus ${voiceStatus}`}>{voiceStatusLabel(voiceStatus, uiLanguage)}</span>
             {(partialTranscript || finalTranscript) && (
               <p className="voiceTranscript">
-                {finalTranscript || partialTranscript}
+                {partialTranscript || finalTranscript}
               </p>
             )}
           </div>
@@ -119,7 +119,7 @@ export function InterviewPanel({
             ) : (
               <button type="button" className="secondaryButton" disabled={isPending || sessionEnded} onClick={onStartVoice}>
                 <Mic size={15} />
-                {t(uiLanguage, 'voiceMode')}
+                {voiceError ? (uiLanguage === 'english' ? 'Reconnect voice' : '重新連接語音') : t(uiLanguage, 'voiceMode')}
               </button>
             )}
           </div>

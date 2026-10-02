@@ -1,6 +1,7 @@
 {
   "title": "Client Realism Repair Prompt",
   "repairGoals": [
+    "Return spoken dialogue only in clientText. Remove parenthesized/asterisk actions, stage directions, role prefixes and narration without adding facts. Facial and body actions belong only in structured affect/motionCue fields. This applies to Cantonese and English.",
     "Keep clientText in natural spoken Hong Kong Cantonese.",
     "Do not sound like a therapist, supervisor, narrator, or textbook.",
     "Reduce over-disclosure when rapport/clientOpenness is low.",

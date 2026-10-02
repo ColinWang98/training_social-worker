@@ -39,9 +39,11 @@ class FakeCoordinator:
         self.loop = None
         self.student_texts: list[str] = []
         self.audio_chunks: list[bytes] = []
+        self.delivery_events: list[dict[str, Any]] = []
         self.case_state = FakeCaseState()
 
-    def start_speech_stream(self, sample_rate: int, event_queue: Any, loop: Any) -> FakeSpeechSession:
+    def start_speech_stream(self, sample_rate: int, event_queue: Any, loop: Any, stream_id: str | None = None, recognition_language=None) -> FakeSpeechSession:
+        self.stream_id = stream_id
         self.event_queue = event_queue
         self.loop = loop
         return FakeSpeechSession(self.audio_chunks)
@@ -49,11 +51,13 @@ class FakeCoordinator:
     def emit(self, event: dict[str, Any]) -> None:
         if not self.event_queue or not self.loop:
             raise RuntimeError("Speech stream was not started.")
-        self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
+        self.loop.call_soon_threadsafe(self.event_queue.put_nowait, {"speechStreamId": self.stream_id, **event})
 
     async def interview_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("studentText") == "invalid speech":
+            raise ValueError("Client reply contains non-spoken content. Please retry this turn.")
         self.student_texts.append(str(payload.get("studentText", "")))
-        if len(self.student_texts) == 1:
+        if len(self.student_texts) == 1 or payload.get("studentText") == "取消這句":
             await asyncio.sleep(0.25)
         return {
             "clientText": f"回覆：{payload.get('studentText')}",
@@ -78,6 +82,20 @@ class FakeCoordinator:
             "voice": "fake-male",
             "voiceGender": "male",
         }
+
+    def record_voice_delivery(
+        self,
+        session_id: str | None,
+        response_id: str | None,
+        status: str,
+        utterance_id: str | None = None,
+    ) -> None:
+        self.delivery_events.append({
+            "sessionId": session_id,
+            "responseId": response_id,
+            "status": status,
+            "utteranceId": utterance_id,
+        })
 
 
 def receive_until(ws: Any, event_type: str, seen: list[dict[str, Any]]) -> dict[str, Any]:
@@ -114,7 +132,8 @@ def main() -> None:
         client = TestClient(service_main.app)
         with client.websocket_connect("/api/voice-stream") as ws:
             ws.send_json({
-                "type": "start",
+                "type": "session.update",
+                "protocolVersion": "2",
                 "sessionId": "voice-state-test",
                 "caseProfile": {"id": "case", "caseType": "student_depression_bullying"},
                 "history": [],
@@ -123,7 +142,12 @@ def main() -> None:
             })
             receive_until(ws, "voice_ready", seen)
             receive_until(ws, "listening_ready", seen)
+            ws.send_json({"type": "audio", "audioBase64": "not-base64"})
+            invalid_audio_error = receive_until(ws, "error", seen)
+            if not invalid_audio_error.get("recoverable"):
+                raise AssertionError(f"Invalid legacy audio was not recoverable: {invalid_audio_error}")
             ws.send_bytes(b"\x00\x01\x02\x03")
+            first_stream = fake.stream_id
 
             fake.emit({"type": "asr_final", "transcript": "你好"})
             receive_until(ws, "asr_partial", seen)
@@ -131,14 +155,40 @@ def main() -> None:
             receive_until(ws, "asr_partial", seen)
             receive_until(ws, "turn_started", seen)
 
-            fake.emit({"type": "asr_final", "transcript": "第二句"})
+            # The final for the already committed partial must not become a new turn.
+            fake.emit({"type": "asr_final", "transcript": "你好我想講多啲", "resultEndMs": 1800, "speechStreamId": first_stream})
+            fake.emit({"type": "asr_final", "transcript": "你好我想講多啲", "resultEndMs": 1800, "speechStreamId": first_stream})
+
+            fake.emit({"type": "asr_final", "transcript": "第二句", "resultEndMs": 3200})
             receive_until_count(ws, "client_response", 2, seen)
-            receive_until_count(ws, "tts_audio", 2, seen)
+            tts_events = receive_until_count(ws, "tts_audio", 2, seen)
+            ws.send_json({"type": "playback_completed", "responseId": tts_events[-1].get("responseId")})
+
+            # Saying the same words again in a later audio segment is legitimate.
+            fake.emit({"type": "asr_final", "transcript": "第二句", "resultEndMs": 4800})
+            receive_until_count(ws, "tts_audio", 3, seen)
+            if fake.student_texts != ["你好我想講多啲", "第二句", "第二句"]:
+                raise AssertionError(f"Audio-boundary dedup lost or duplicated a turn: {fake.student_texts}")
+
+            fake.emit({"type": "asr_final", "transcript": "invalid speech", "resultEndMs": 6000})
+            error = receive_until(ws, "error", seen)
+            assert error.get("responseId") and error.get("recoverable")
+
+            fake.emit({"type": "asr_final", "transcript": "取消這句"})
+            receive_until(ws, "asr_partial", seen)
+            cancelled_turn = receive_until(ws, "turn_started", seen)
+            ws.send_json({"type": "barge_in", "utteranceId": "utt-interrupt"})
+            barge_ack = receive_until(ws, "barge_in_ack", seen)
+            receive_until(ws, "response_cancelled", seen)
+            if barge_ack.get("responseId") != cancelled_turn.get("responseId"):
+                raise AssertionError(f"Barge-in did not cancel the active response: {barge_ack}")
 
         if fake.student_texts[:2] != ["你好我想講多啲", "第二句"]:
             raise AssertionError(f"Unexpected processed transcripts: {fake.student_texts}")
         if fake.audio_chunks != [b"\x00\x01\x02\x03"]:
             raise AssertionError(f"Binary PCM frame was not forwarded: {fake.audio_chunks}")
+        if not any(item.get("status") == "completed" for item in fake.delivery_events):
+            raise AssertionError(f"Completed browser playback was not recorded: {fake.delivery_events}")
         committed = [item.get("transcript") for item in seen if item.get("type") == "utterance_committed"]
         if committed[:2] != ["你好我想講多啲", "第二句"]:
             raise AssertionError(f"Unexpected committed transcripts: {committed}")
@@ -161,6 +211,14 @@ def main() -> None:
         for required_event in ["asr_final", "utterance_committed", "turn_started", "client_response", "tts_audio"]:
             if required_event not in timed_events:
                 raise AssertionError(f"Missing serverElapsedMs on {required_event}: {seen}")
+        sequences = [item.get("sequence") for item in seen]
+        if not all(isinstance(item, int) for item in sequences) or sequences != sorted(set(sequences)):
+            raise AssertionError(f"Realtime event sequence is not strictly increasing: {sequences}")
+        if any(item.get("protocolVersion") != "2" for item in seen):
+            raise AssertionError("Protocol v2 envelope was not attached to every event.")
+        cancelled_response_id = cancelled_turn.get("responseId")
+        if any(item.get("type") == "client_response" and item.get("responseId") == cancelled_response_id for item in seen):
+            raise AssertionError("Cancelled response leaked into the client transcript.")
         print({
             "ok": True,
             "processedTranscripts": fake.student_texts,

@@ -41,7 +41,6 @@ export async function startBrowserVad({
       preSpeechPadMs: 180,
       minSpeechMs: 360,
       submitUserSpeechOnPause: false,
-      onSpeechStart,
       onSpeechRealStart: onSpeechStart,
       onSpeechEnd: () => onSpeechEnd(),
       onVADMisfire: () => onStatus('fallback', 'vad_misfire'),

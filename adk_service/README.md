@@ -22,7 +22,14 @@ DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ADK_SERVICE_PORT=8765
+# Optional staged execution migration; keep false until provider-backed review.
+ADK_LLM_EXECUTION_ENABLED=false
 ```
+
+The default model transport is direct DeepSeek HTTP. When the server-only
+`ADK_LLM_EXECUTION_ENABLED=true` flag is enabled, one request is routed through an
+ephemeral Google ADK `Runner` session. Runner failures do not retry on the direct
+path, so one turn cannot silently incur two model calls. The flag is off by default.
 
 ## Supabase Postgres
 

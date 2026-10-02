@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -57,30 +56,11 @@ SESSION_PLANS: dict[str, list[str]] = {
 
 
 def load_case(case_type: str) -> dict:
-    source = (ROOT / "src" / "lib" / "caseProfile.ts").read_text("utf-8")
-    marker = f"caseType: '{case_type}'"
-    start = source.find(marker)
-    if start == -1:
-        raise RuntimeError(f"Missing case type {case_type}")
-    object_start = source.rfind("{", 0, start)
-    depth = 0
-    object_end = object_start
-    for index in range(object_start, len(source)):
-        if source[index] == "{":
-            depth += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                object_end = index + 1
-                break
-    return ts_object_to_json(source[object_start:object_end])
-
-
-def ts_object_to_json(snippet: str) -> dict:
-    text = snippet.replace("'", '"').replace("undefined", "null")
-    text = re.sub(r"([,{]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:", r'\1"\2":', text)
-    text = re.sub(r",(\s*[}\]])", r"\1", text)
-    return json.loads(text)
+    profiles = json.loads((ROOT / "adk_service" / "cases" / "profiles.json").read_text("utf-8"))
+    for profile in profiles:
+        if profile.get("caseType") == case_type or profile.get("id") == case_type:
+            return profile
+    raise RuntimeError(f"Missing case type {case_type}")
 
 
 def apply_response(case_profile: dict, response: dict) -> dict:

@@ -11,6 +11,7 @@ adk_service/.env
 *.key
 data/corpus/builds
 data/corpus/reports
+data/reports/reaction-plans
 data/corpus/*.sqlite
 data/corpus/*.sqlite-wal
 data/corpus/*.sqlite-shm

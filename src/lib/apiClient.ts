@@ -11,6 +11,7 @@ import {
   SimulationMethod,
   SupervisorReview,
 } from './interviewTypes';
+import { displayCase } from './caseProfile';
 
 export type AuthSession = {
   authenticated: boolean;
@@ -20,6 +21,8 @@ export type AuthSession = {
 };
 
 type InterviewRequest = {
+  turnId?: string;
+  expectedStateVersion?: number;
   caseProfile: CaseProfile;
   studentText: string;
   history: InterviewTurn[];
@@ -49,6 +52,8 @@ type FinalReviewRequest = {
 };
 
 type SessionResponse = {
+  stateVersion: number;
+  sessionView: Partial<CaseProfile>;
   sessionId: string;
   caseId?: string;
   reset?: boolean;
@@ -103,6 +108,13 @@ export async function requestAuthSession(): Promise<AuthSession> {
   return data as AuthSession;
 }
 
+export async function requestCases(): Promise<CaseProfile[]> {
+  const response = await fetch('/api/cases');
+  const data = await response.json();
+  if (!response.ok || !Array.isArray(data.cases)) throw new Error('Unable to load cases');
+  return data.cases.map(displayCase);
+}
+
 export async function requestSupervisorReview(request: SupervisorRequest): Promise<SupervisorReview> {
   const data = await postJson('/api/supervisor-review', request);
   if (!isSupervisorReview(data)) {
@@ -153,7 +165,8 @@ export async function listEvidenceCards(request: EvidenceCardListRequest): Promi
   const response = await fetch(`/api/evidence-cards?${params.toString()}`);
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(data?.error ?? `Request failed with ${response.status}`);
+    const detail = typeof data?.detail === 'string' ? data.detail : data?.error;
+    throw new Error(detail ?? `Request failed with ${response.status}`);
   }
   if (!isEvidenceCardListResponse(data)) {
     throw new Error('Evidence card list failed schema validation.');
@@ -244,7 +257,10 @@ function isPostSessionSupervisorReport(value: unknown): value is PostSessionSupe
 
 function isSessionResponse(value: unknown): value is SessionResponse {
   const response = value as SessionResponse;
-  return typeof response?.sessionId === 'string';
+  return typeof response?.sessionId === 'string'
+    && Number.isSafeInteger(response.stateVersion)
+    && response.sessionView !== null
+    && typeof response.sessionView === 'object';
 }
 
 function isTtsResponse(value: unknown): value is TtsResponse {
